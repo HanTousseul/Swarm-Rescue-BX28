@@ -9,6 +9,9 @@ from typing import Optional, Tuple, Dict, Any, List
 
 from numpy import pi, cos, sin
 
+from swarm_rescue.solutions.my_drone_driver import MyDroneDriver
+from typing import Optional, Tuple, Any
+
 
 class MyDroneEval(MyDroneLidarCommunication):
     def define_message_for_all(self) -> Tuple[Optional[int], Tuple[Any, Any]]:
