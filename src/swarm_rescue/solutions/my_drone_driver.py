@@ -76,16 +76,16 @@ class MyStatefulDrone(DroneAbstract):
         min_ray=-3/4*math.pi,0
         max_ray=0,0
         ray_ini=False
-        minimal_distance=285
+        minimal_distance=150 # distance (pixels), if the lidar rays shot by the drones go further than this distance, the function will interpret it as a possible path. setting it too high will prevent the drone from seeing some openings and setting it too low will make it see too many paths 
         coords=self.gps_values()
         angle=self.measured_compass_angle()
         step_forward=50
-
+        ignored_rays=22 #nb of rays the drone ignores. all of those rays are centered on -pi
 
         if not self.lidar_is_disabled():
             lidar_data=self.lidar_values()
             ray_angles = self.lidar_rays_angles()
-            for i in range (22,len(lidar_data)-22):
+            for i in range (ignored_rays,len(lidar_data)-ignored_rays):
                 if lidar_data[i]>minimal_distance: 
                     if lidar_data[i-1]<=minimal_distance:
                         if i==22:
