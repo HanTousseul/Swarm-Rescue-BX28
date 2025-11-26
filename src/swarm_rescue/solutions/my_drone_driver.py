@@ -237,6 +237,8 @@ class MyStatefulDrone(DroneAbstract):
             # If person found -> Switch to rescue
             if found_person_pos is not None:
                 self.state = "RESCUING"
+                child_key = tuple(found_person_pos)
+                self.path_history[child_key] = self.current_target
                 self.current_target = found_person_pos
             
             # If no target or reached old target
@@ -271,30 +273,24 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- STATE: RESCUING ---
         elif self.state == "RESCUING":
-            # Update person position continuously for accuracy
-            if found_person_pos is not None:
-                self.current_target = found_person_pos
             
             # Check if already grasped
             if self.grasped_wounded_persons():
                 self.state = "RETURNING"
-                # First target when returning is rescue center (if known) or go back to old path
-                if self.rescue_center_pos is not None:
-                    self.current_target = self.rescue_center_pos
-                else:
-                    # Fallback: Return to position before rescue
-                    self.current_target = np.array([0.0, 0.0]) # (Need better backtrack logic here)
-
 
         # --- STATE: RETURNING ---
         elif self.state == "RETURNING":
-            # If rescue center found -> go straight to it
-            if self.rescue_center_pos is not None:
-                self.current_target = self.rescue_center_pos
-            
-            # If reached destination (station)
-            if found_rescue_pos and np.linalg.norm(self.estimated_pos - self.current_target) < REACH_THRESHOLD:
-                self.state = "DROPPING"
+
+            current_key = tuple(self.current_target) if self.current_target is not None else None
+            if current_key and current_key in self.path_history: self.current_target = self.path_history[current_key]
+            else:
+                # If rescue center found -> go straight to it
+                if self.rescue_center_pos is not None:
+                    self.current_target = self.rescue_center_pos
+                
+                # If reached destination (station)
+                if found_rescue_pos and np.linalg.norm(self.estimated_pos - self.current_target) < REACH_THRESHOLD:
+                    self.state = "DROPPING"
 
 
         # --- STATE: DROPPING ---
