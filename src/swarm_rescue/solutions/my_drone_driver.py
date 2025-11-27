@@ -85,7 +85,7 @@ class MyStatefulDrone(DroneAbstract):
         
         # Lưu ý: Nên dùng estimated_pos thay vì gps_values để tránh lỗi khi mất GPS
         # Nếu class của bạn có self.estimated_pos, hãy đổi dòng dưới thành: coords = self.estimated_pos
-        coords = self.gps_values() 
+        coords = self.estimated_pos
         if coords is None: return [] # Tránh crash nếu mất GPS mà chưa có estimated_pos
 
         angle = self.measured_compass_angle()
