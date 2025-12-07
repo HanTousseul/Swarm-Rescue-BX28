@@ -40,9 +40,29 @@ class MyStatefulDrone(DroneAbstract):
         self.current_target = None # Current target point (np.array)
         self.rescue_center_pos = None # Rescue center position (save when found)
 
-        self.lidar_using_state = True
         self.position_before_rescue = None
+        self.initial_position = None
+        self.cnt_timestep = 0
 
+    def reset(self):
+        # --- 1. NAVIGATOR VARIABLES (Quoc Viet & Anhad) ---
+        # Estimated position and angle (More reliable than raw GPS)
+        self.estimated_pos = np.array([0.0, 0.0]) 
+        self.estimated_angle = 0.0
+        self.gps_last_known = None # To check when GPS is lost/recovered
+
+
+        # --- 2. MAPPER VARIABLES (Marc) ---
+        self.edge = {}
+        self.visited_node = []
+        
+        # --- 3. COMMANDER VARIABLES (Van Khue) ---
+        self.state = "EXPLORING" # EXPLORING, RESCUING, RETURNING, DROPPING
+        self.path_history = {}
+        self.current_target = None # Current target point (np.array)
+        self.rescue_center_pos = None # Rescue center position (save when found)
+
+        self.position_before_rescue = None
 
     def update_navigator(self):
         """Update estimated position based on GPS (if available) or Odometer."""
@@ -70,12 +90,13 @@ class MyStatefulDrone(DroneAbstract):
                 
                 # Update new angle
                 self.estimated_angle = normalize_angle(self.estimated_angle + theta)
+        if self.initial_position is None: self.initial_position = self.estimated_pos
 
 
     def lidar_possible_paths(self) -> List:
         '''
-        Thu thập dữ liệu Lidar, phân tích và trả về danh sách các khu vực tiềm năng (Frontiers).
-        Đã sửa đổi: Sắp xếp danh sách để ưu tiên các điểm nằm TRƯỚC MẶT drone nhất.
+        Collect Lidar data, analyze and return a list of potential areas (Frontiers).
+        Modified: Sort the list to prioritize points directly IN FRONT of the drone.
         '''
         list_possible_area = []
         min_ray = -3/4 * math.pi, 0
@@ -83,30 +104,30 @@ class MyStatefulDrone(DroneAbstract):
         ray_ini = False
         minimal_distance = 250
         
-        # Lưu ý: Nên dùng estimated_pos thay vì gps_values để tránh lỗi khi mất GPS
-        # Nếu class của bạn có self.estimated_pos, hãy đổi dòng dưới thành: coords = self.estimated_pos
+        # Note: Should use estimated_pos instead of gps_values to avoid errors when GPS is lost
+        # If your class has self.estimated_pos, change the line below to: coords = self.estimated_pos
         coords = self.estimated_pos
-        if coords is None: return [] # Tránh crash nếu mất GPS mà chưa có estimated_pos
+        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set
 
         angle = self.estimated_angle
-        step_forward = 128
+        step_forward = 132
 
-        # Hàm phụ để tính độ lệch góc (dùng để sắp xếp)
+        # Helper function to calculate angle deviation (used for sorting)
         def sort_key_by_angle(item):
-            # item cấu trúc: ((x, y), visited)
+            # item structure: ((x, y), visited)
             target_pos = item[0]
             dx = target_pos[0] - coords[0]
             dy = target_pos[1] - coords[1]
             
-            # Góc của vector từ drone đến điểm mục tiêu
+            # Angle of the vector from drone to target point
             target_vector_angle = math.atan2(dy, dx)
             
-            # Góc lệch so với hướng đầu drone (đã chuẩn hóa về -pi đến pi)
+            # Angle deviation from drone's heading (normalized to -pi to pi)
             diff = target_vector_angle - angle
             while diff > math.pi: diff -= 2 * math.pi
             while diff < -math.pi: diff += 2 * math.pi
             
-            # Trả về trị tuyệt đối (càng gần 0 càng tốt)
+            # Return absolute value (closer to 0 is better)
             return abs(diff)
 
         if not self.lidar_is_disabled():
@@ -123,13 +144,13 @@ class MyStatefulDrone(DroneAbstract):
                     if i != 0 and lidar_data[i - 1] > minimal_distance:
                         max_ray = ray_angles[i - 1], i - 1
                         if max_ray != min_ray and min_ray[1] + 3 < max_ray[1]:
-                            # Tính toán tọa độ
+                            # Calculate coordinates
                             avg_angle = (min_ray[0] + max_ray[0]) / 2
                             tx = coords[0] + step_forward * math.cos(angle + avg_angle)
                             ty = coords[1] + step_forward * math.sin(angle + avg_angle)
                             list_possible_area.append(((tx, ty), False))
                 
-                # Xử lý trường hợp biên (vòng tròn)
+                # Handle edge case (circular wrap-around)
                 if i == len(lidar_data) - 23 and min_ray[1] > max_ray[1]:
                     if ray_ini:
                         boolean = True
@@ -141,24 +162,24 @@ class MyStatefulDrone(DroneAbstract):
                         if boolean:
                             del list_possible_area[0]
                             
-                            # Tính toán điểm cuối cùng
+                            # Calculate last point
                             avg_angle = (min_ray[0] + max_ray[0]) / 2
                             tx = coords[0] + step_forward * math.cos(angle + avg_angle)
                             ty = coords[1] + step_forward * math.sin(angle + avg_angle)
                             list_possible_area.append(((tx, ty), False))
                             
-                            # --- SẮP XẾP TRƯỚC KHI TRẢ VỀ ---
+                            # --- SORT BEFORE RETURNING ---
                             list_possible_area.sort(key=sort_key_by_angle)
                             return list_possible_area
 
                     max_ray = ray_angles[i], i
-                    # Tính toán điểm cuối cùng (không loop)
+                    # Calculate last point (no loop)
                     avg_angle = (min_ray[0] + max_ray[0]) / 2
                     tx = coords[0] + step_forward * math.cos(angle + avg_angle)
                     ty = coords[1] + step_forward * math.sin(angle + avg_angle)
                     list_possible_area.append(((tx, ty), False))
 
-        # --- SẮP XẾP TRƯỚC KHI TRẢ VỀ (Trường hợp thông thường) ---
+        # --- SORT BEFORE RETURNING (Normal case) ---
         list_possible_area.sort(key=sort_key_by_angle, reverse=True)
         
         return list_possible_area
@@ -177,19 +198,19 @@ class MyStatefulDrone(DroneAbstract):
                 delta_x = x - node[0]
                 delta_y = y - node[1]
                 dist_to_target = math.hypot(delta_x, delta_y)
-                if dist_to_target < 35: visited = True
+                if dist_to_target < 30: visited = True
             if not visited: 
                 self.edge[pos_key].append((x,y))
-                print(f'Add new target {x}, {y}')
+                # print(f'Add new target {x}, {y}')
 
 
 
     def move_to_target(self) -> CommandsDict:
         """
-        Điều khiển drone đi CHÍNH XÁC đến mục tiêu.
-        Chiến thuật: Đi chậm, xoay chuẩn, giảm tốc sớm.
+        Control the drone to move PRECISELY to the target.
+        Strategy: Go slow, rotate accurately, decelerate early.
         """
-        # print(f'Going to {self.current_target}') # Debug nếu cần
+        # # print(f'Going to {self.current_target}') # Debug if needed
         
         if self.current_target is None:
             return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
@@ -198,53 +219,53 @@ class MyStatefulDrone(DroneAbstract):
         delta_y = self.current_target[1] - self.estimated_pos[1]
         dist_to_target = math.hypot(delta_x, delta_y)
 
-        # 1. Xoay về hướng mục tiêu
+        # 1. Rotate towards the target
         target_angle = math.atan2(delta_y, delta_x)
         angle_error = normalize_angle(target_angle - self.estimated_angle)
         
-        # Tăng lực xoay để chỉnh hướng nhanh hơn
+        # Increase rotation force to correct heading faster
         rotation_cmd = KP_ROTATION * angle_error
         rotation_cmd = max(-1.0, min(1.0, rotation_cmd))
 
-        # 2. Tiến tới (LOGIC MỚI: CHẬM & CHẮC)
+        # 2. Move forward (NEW LOGIC: SLOW & STEADY)
         
-        # Cấu hình tốc độ
+        # Speed configuration
         MAX_SPEED = 0.6
         BRAKING_DIST = 150.0
-        STOP_DIST = 15.0 # Tăng khoảng cách dừng lên một chút để an toàn
+        STOP_DIST = 15.0 # Increase stopping distance slightly for safety
 
         if dist_to_target > BRAKING_DIST:
             forward_cmd = MAX_SPEED
         elif dist_to_target > STOP_DIST:
-            # Giảm tốc tuyến tính
-            # Bỏ dòng max(0.1, ...) để cho phép nó giảm về gần 0
+            # Linear deceleration
+            # Removed max(0.1, ...) line to allow it to reduce close to 0
             forward_cmd = (dist_to_target / BRAKING_DIST) * MAX_SPEED
             forward_cmd = max(0.1, forward_cmd)
         else:
-            # Rất gần (< 15px): Cắt ga hoàn toàn
+            # Very close (< 15px): Cut throttle completely
             forward_cmd = 0.05
 
-        # 3. Kỷ luật Xoay (Strict Rotation)
-        # Chỉ được phép di chuyển nếu hướng đã chuẩn (lệch < 0.2 rad ~ 11 độ)
-        # Code cũ là 0.5 (30 độ) -> Quá lỏng lẻo
+        # 3. Rotation Discipline (Strict Rotation)
+        # Only allow movement if heading is accurate (deviation < 0.2 rad ~ 11 degrees)
+        # Old code was 0.5 (30 degrees) -> Too loose
         if abs(angle_error) > 0.2:
-            forward_cmd = 0.0 # Dừng lại để xoay cho xong đã
+            forward_cmd = 0.0 # Stop to finish rotating
 
         forward_cmd = max(-1.0, min(1.0, forward_cmd))
 
-        # 4. Tránh va chạm (Lidar Safety) - Giữ nguyên
+        # 4. Collision Avoidance (Lidar Safety) - Kept as is
         # if self.lidar_using_state:
-        lidar_vals = self.lidar_values()
-        if lidar_vals is not None:
-            if lidar_vals[90] < SAFE_DISTANCE:
-                forward_cmd = 0.0 
-                rotation_cmd = 1.0 
+        # lidar_vals = self.lidar_values()
+        # if lidar_vals is not None:
+        #     if lidar_vals[90] < SAFE_DISTANCE:
+        #         forward_cmd = 0.0 
+        #         rotation_cmd = 1.0 
 
-        # --- LOGIC ĐẶC BIỆT CHO RETURNING (Cõng người) ---
+        # --- SPECIAL LOGIC FOR RETURNING (Carrying person) ---
         if self.state == "RETURNING":
             forward_cmd = 0.7
         # else:
-        #     print(f'Spec of moving, forward: {forward_cmd}, rotation: {rotation_cmd}')
+        #     # print(f'Spec of moving, forward: {forward_cmd}, rotation: {rotation_cmd}')
 
         grasper_val = 1 if (self.state == "RESCUING" or self.state == "RETURNING") else 0
 
@@ -257,7 +278,7 @@ class MyStatefulDrone(DroneAbstract):
         #         "grasper": grasper_val
         #     }
         # else:
-        print(f'Spec of moving, forward: {forward_cmd}, rotation: {rotation_cmd}, dist: {dist_to_target}')
+        # print(f'Spec of moving, forward: {forward_cmd}, rotation: {rotation_cmd}, dist: {dist_to_target}')
         return {
             "forward": forward_cmd, 
             "lateral": 0.0, 
@@ -269,11 +290,12 @@ class MyStatefulDrone(DroneAbstract):
         if pos is not None:
             pos_key = tuple(pos) if isinstance(pos, np.ndarray) else pos
             if pos_key not in self.visited_node: 
-                print(f'Add {pos_key} to visited nodes')
+                # print(f'Add {pos_key} to visited nodes')
                 self.visited_node.append(pos_key)
 
 
     def control(self) -> CommandsDict:
+        self.cnt_timestep += 1
         check_center = False
         
         # 1. Update Navigator (Always run first)
@@ -308,22 +330,23 @@ class MyStatefulDrone(DroneAbstract):
         
         # --- STATE: EXPLORING ---
         if self.state == "EXPLORING":
+            if self.cnt_timestep == 2400: self.state = "RETURNING"
             # If person found -> Switch to rescue
             if found_person_pos is not None:
                 self.state = "RESCUING"
-                print(f'Going to rescue from {self.current_target} to {found_person_pos}')
+                # print(f'Going to rescue from {self.current_target} to {found_person_pos}')
                 self.position_before_rescue = self.current_target
                 self.current_target = found_person_pos
                 # child_key = tuple(found_person_pos)
                 # self.path_history[child_key] = self.current_target
                 # self.current_target = found_person_pos
                 # cur_key = tuple(self.current_target)
-                # print(f'Check key valid: {cur_key in self.path_history}')
+                # # print(f'Check key valid: {cur_key in self.path_history}')
             
             # If no target or reached old target
             elif self.current_target is None or np.linalg.norm(self.estimated_pos - self.current_target) < REACH_THRESHOLD:
                 self.visit(self.current_target)
-                print(f'Arrived {self.current_target}')
+                # print(f'Arrived {self.current_target}')
                 
                 # 2. Update Mapper (To find new paths)
                 if self.current_target is None: self.visit(self.estimated_pos)
@@ -343,52 +366,52 @@ class MyStatefulDrone(DroneAbstract):
                     current_key = tuple(self.current_target) if self.current_target is not None else None
                     if current_key and current_key in self.path_history:
                          self.current_target = self.path_history[current_key]
-                         print('Goint to parent node')
+                         # print('Goint to parent node')
                     else:
                         # Handle when there's no return path
-                        print("No parent node found, staying at current position")
+                        # print("No parent node found, staying at current position")
                         self.current_target = self.estimated_pos.copy()
-                print(f'Choose next target: {self.current_target}')
+                # print(f'Choose next target: {self.current_target}')
 
 
         # --- STATE: RESCUING ---
         elif self.state == "RESCUING":
 
             if found_person_pos is not None and not self.grasped_wounded_persons():
-                print(f'Going to rescue from {self.current_target} to {found_person_pos}')
-                # self.current_target = found_person_pos
+                # print(f'Going to rescue from {self.current_target} to {found_person_pos}')
+                self.current_target = found_person_pos
                 # child_key = tuple(found_person_pos)
                 # parent_node = self.current_target if self.current_target is not None else self.estimated_pos
                 # self.path_history[child_key] = parent_node.copy()
-                # print(f'Save parent: parent: {parent_node}, child: {child_key}')
+                # # print(f'Save parent: parent: {parent_node}, child: {child_key}')
 
             # Check if already grasped
             if self.grasped_wounded_persons():
                 self.state = "RETURNING"
                 self.lidar_using_state = False
                 self.current_target = self.position_before_rescue
-                print(f'Graped person at target {self.current_target} and go back to {self.current_target}')
+                # print(f'Graped person at target {self.current_target} and go back to {self.current_target}')
 
 
         # --- STATE: RETURNING ---
         elif self.state == "RETURNING":
             if check_center:
-                print(f'See rescue center at {self.rescue_center_pos} with dist {np.linalg.norm(self.estimated_pos - self.rescue_center_pos)}')
+                # print(f'See rescue center at {self.rescue_center_pos} with dist {np.linalg.norm(self.estimated_pos - self.rescue_center_pos)}')
                 self.current_target = self.rescue_center_pos
-                if found_rescue_pos and np.linalg.norm(self.estimated_pos - self.current_target) < 20:
-                    print(f'Start dropping person at {self.estimated_pos}')
+                if found_rescue_pos and np.linalg.norm(self.estimated_pos - self.current_target) < 15:
+                    # print(f'Start dropping person at {self.estimated_pos}')
                     self.state = "DROPPING"
             else:
 
-                print(f'Return, dist: {np.linalg.norm(self.estimated_pos - self.current_target)}')
+                # print(f'Return, dist: {np.linalg.norm(self.estimated_pos - self.current_target)}')
                 if np.linalg.norm(self.estimated_pos - self.current_target) < REACH_THRESHOLD:
 
                     current_key = tuple(self.current_target) if self.current_target is not None else None
-                    print(f'Check key {current_key} and {current_key in self.path_history}')
+                    # print(f'Check key {current_key} and {current_key in self.path_history}')
                     if current_key and current_key in self.path_history: 
-                        print(f'Check parent: {self.path_history[current_key]}')
+                        # print(f'Check parent: {self.path_history[current_key]}')
                         self.current_target = self.path_history[current_key]
-                        print(f'Going back to parent')
+                        # print(f'Going back to parent')
                     else:
                         # If rescue center found -> go straight to it
                         if self.rescue_center_pos is not None:
@@ -397,15 +420,16 @@ class MyStatefulDrone(DroneAbstract):
                         # If reached destination (station)
                         if found_rescue_pos and np.linalg.norm(self.estimated_pos - self.current_target) < REACH_THRESHOLD:
                             self.state = "DROPPING"
-                print(f'Going back to {self.current_target}, at {self.estimated_pos}')
+                # print(f'Going back to {self.current_target}, at {self.estimated_pos}')
 
 
         # --- STATE: DROPPING ---
         elif self.state == "DROPPING":
             # Stop and release
-            print(f'Finish dropped')
-            return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
-
+            # print(f'Finish dropped')
+            # self.reset()
+            # self.state = "EXPLORING"
+            self.current_target = self.initial_position
 
         # 5. Execute movement
         return self.move_to_target()
