@@ -97,20 +97,21 @@ class MyStatefulDrone(DroneAbstract):
         '''
         Collect Lidar data, analyze and return a list of potential areas (Frontiers).
         Modified: Sort the list to prioritize points directly IN FRONT of the drone.
+        Returns an empty list if GPS is not working and there is no self.estimated_pos
         '''
         list_possible_area = []
         min_ray = -3/4 * math.pi, 0
         max_ray = 0, 0
         ray_ini = False
         minimal_distance = 250
+        step_forward = 132
         
         # Note: Should use estimated_pos instead of gps_values to avoid errors when GPS is lost
-        # If your class has self.estimated_pos, change the line below to: coords = self.estimated_pos
         coords = self.estimated_pos
+        angle = self.estimated_angle
+
         if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set
 
-        angle = self.estimated_angle
-        step_forward = 132
 
         # Helper function to calculate angle deviation (used for sorting)
         def sort_key_by_angle(item):
@@ -121,11 +122,8 @@ class MyStatefulDrone(DroneAbstract):
             
             # Angle of the vector from drone to target point
             target_vector_angle = math.atan2(dy, dx)
-            
             # Angle deviation from drone's heading (normalized to -pi to pi)
-            diff = target_vector_angle - angle
-            while diff > math.pi: diff -= 2 * math.pi
-            while diff < -math.pi: diff += 2 * math.pi
+            diff = normalize_angle(target_vector_angle - angle, False)
             
             # Return absolute value (closer to 0 is better)
             return abs(diff)
