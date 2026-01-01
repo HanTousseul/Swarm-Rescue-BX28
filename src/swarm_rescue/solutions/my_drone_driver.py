@@ -298,6 +298,9 @@ class MyStatefulDrone(DroneAbstract):
         
         # 1. Update Navigator (Always run first)
         self.update_navigator()
+        # 2. Process Communications (Update knowledge from other drones)
+        self.comms_visited()
+        print(self.visited_node)
         
         # 3. Process Semantic Sensor (Find person / Station)
         semantic_data = self.semantic_values()
@@ -434,4 +437,15 @@ class MyStatefulDrone(DroneAbstract):
 
 
     def define_message_for_all(self):
-        pass
+        """
+        Send the current position of the drone
+        """
+        return {'id': self.identifier, 'position': self.estimated_pos}
+    def comms_visited(self):
+        """Add the visited nodes from other drones to self.visited_node, using self.visit(pos)
+        """
+        if self.communicator:
+            for msg in self.communicator.received_messages:
+                if msg and 'position' in msg:
+                    self.visit(msg['position'])
+            
