@@ -308,9 +308,10 @@ class MyStatefulDrone(DroneAbstract):
         # 1. Update Navigator (Always run first)
         self.update_navigator()
         
-        # 2. Process Communications (Update knowledge from other drones)
+        # 2. Process Communications (Update knowledge from other drones) and handle the no-com zone
         self.comm_visited()
         self.update_comm_status()
+        self.visit_no_comm()
         
         # 3. Process Semantic Sensor (Find person / Station)
         semantic_data = self.semantic_values()
