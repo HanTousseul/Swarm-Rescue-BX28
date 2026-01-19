@@ -43,6 +43,10 @@ class MyStatefulDrone(DroneAbstract):
         self.position_before_rescue = None
         self.initial_position = None
         self.cnt_timestep = 0
+        
+        self.temporary_store = [] # Temporarily stores visited nodes in no-com zone
+        self.comm_active = True # Whether communication is activated
+        self.consecutive_silence_steps = 0 # Number of consecutive timesteps the drone haven't received any messages
 
     def reset(self):
         # --- 1. NAVIGATOR VARIABLES (Quoc Viet & Anhad) ---
@@ -63,6 +67,11 @@ class MyStatefulDrone(DroneAbstract):
         self.rescue_center_pos = None # Rescue center position (save when found)
 
         self.position_before_rescue = None
+        
+        self.temporary_store = [] # Temporarily stores visited nodes in no-com zone
+        self.comm_active = True # Whether communication is activated
+        self.consecutive_silence_steps = 0 # Number of consecutive timesteps the drone haven't received any messages
+
 
     def update_navigator(self):
         """Update estimated position based on GPS (if available) or Odometer."""
@@ -298,9 +307,11 @@ class MyStatefulDrone(DroneAbstract):
         
         # 1. Update Navigator (Always run first)
         self.update_navigator()
-        # 2. Process Communications (Update knowledge from other drones)
-        self.comms_visited()
-        #print(self.visited_node)
+        
+        # 2. Process Communications (Update knowledge from other drones) and handle the no-com zone
+        self.comm_visited()
+        self.update_comm_status()
+        self.visit_no_comm()
         
         # 3. Process Semantic Sensor (Find person / Station)
         semantic_data = self.semantic_values()
@@ -438,14 +449,55 @@ class MyStatefulDrone(DroneAbstract):
 
     def define_message_for_all(self):
         """
-        Send the current position of the drone
+        Send message to other drones
         """
-        return {'id': self.identifier, 'position': self.estimated_pos}
-    def comms_visited(self):
-        """Add the visited nodes from other drones to self.visited_node, using self.visit(pos)
+        message = {'id': self.identifier, 'position': tuple(self.estimated_pos)}
+        message['temporary'] = self.temporary_store if self.temporary_store else []
+        return message
+    
+    def comm_visited(self):
+        """Add the visited nodes from other drones to self.visited_node, 
+        using self.visit(pos). Additionally, update visited nodes based on the 
+        temporary list received from the drone that was in no-com zone, and clear
+        out temporary_store of that drone
         """
-        if self.communicator:
-            for msg in self.communicator.received_messages:
-                if msg and 'position' in msg:
-                    self.visit(msg['position'])
+        if not self.communicator:
+            return
+        
+        if self.communicator.received_messages:
+            self.temporary_store = []
+        
+        for msg in self.communicator.received_messages:
+            if not msg:
+                continue
             
+            if 'position' in msg:
+                self.visit(msg['position'])
+            
+            if 'temporary' in msg and msg['temporary']:
+                for p in msg['temporary']:
+                    self.visit(p)
+        
+    def update_comm_status(self):
+        """Update the communication status of the drone, 
+        to determine whether the drone is in No-Com Zone.
+        """
+        if self.communicator and len(self.communicator.received_messages) > 0:
+            self.consecutive_silence_steps = 0
+            self.comm_active = True
+        else:
+            self.consecutive_silence_steps += 1
+        
+        # Threshold: If silence persists for 10 steps, assume No-Com
+        if self.consecutive_silence_steps > 10:
+            self.comm_active = False
+            
+    def visit_no_comm(self): 
+        """Add the nodes to a temporary list and visited_node if the drone is in no-com zone
+        """
+        if self.comm_active == False:
+            pos = tuple(self.estimated_pos)
+            self.visit(pos)
+            self.temporary_store.append(pos) 
+        
+     
