@@ -137,7 +137,8 @@ class MyStatefulDrone(DroneAbstract):
 
         def is_visited(position: Tuple) -> bool:
             '''
-            function that returns a bool indicating whether or not the new possible path has been visited yet, or is already in the list of possible paths
+            function that returns True if the position is worth adding to list_possible_paths, False otherwise
+            checks for proximity with visited nodes, current position and all possible paths
                         
             :param position: (x,y) coordinates of the new possible path considered
             :type position: Tuple
@@ -161,9 +162,11 @@ class MyStatefulDrone(DroneAbstract):
                         visited = True
 
             if not(visited):
-
+                print('norm', np.linalg.norm(position-coords))
                 if np.linalg.norm(position-coords)<Same_possible_path:
                     visited = True
+            print('is_visited', (visited))
+            return visited
 
         def correct_position(mean_angle:float) -> Tuple:
             '''
@@ -191,6 +194,8 @@ class MyStatefulDrone(DroneAbstract):
                 print(min_dist)
 
                 new_pos = coords[0] + min_dist*np.cos(mean_angle), coords[1] + min_dist*np.sin(mean_angle)
+
+
                 return(new_pos, mean_angle)
         
             else: 
@@ -224,13 +229,15 @@ class MyStatefulDrone(DroneAbstract):
 
             if visited: return # we stop if path is already visited
 
-            needs_correction = correct_position(mean_angle)
+            # correction refers to setting the node closer to the drone in case it is hidden by a wall for some reason
+            needs_correction = correct_position(mean_angle)  
+            print('position, needs correction',position, needs_correction)
             if needs_correction:
+
                 position = needs_correction[0] # we correct if needed
-
-            visited = is_visited(position)
-
-            if visited: return # if the corrected path is not worth adding
+                visited = is_visited(position)
+                print('Needs corrcetion, is visited?', visited)
+                if visited: return # if the corrected path is not worth adding
 
             # if the path is new (theoretically)
             inserted = False
@@ -249,8 +256,7 @@ class MyStatefulDrone(DroneAbstract):
 
                 lidar_possible_angles.append((position, mean_angle))
 
-
-            # show them on map for debugging
+            print('computed', computed)
             return
 
         for index in range(round(angle_ignore/2), 181 - round(angle_ignore/2) -1):
@@ -387,7 +393,10 @@ class MyStatefulDrone(DroneAbstract):
             add_to_lidar_possible_angles(computed)
         
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
-        print(lidar_possible_angles)
+        print('list',lidar_possible_angles)
+        #for elt in lidar_possible_angles:
+        #    print('linalg norm', elt[0], np.linalg.norm(elt[0]-coords))
+
         lidar_possible_angles.reverse()
         return lidar_possible_angles
 
@@ -575,7 +584,6 @@ class MyStatefulDrone(DroneAbstract):
                 # 2. Update Mapper (To find new paths)
                 if self.current_target is None: self.visit(self.estimated_pos)
                 self.update_mapper()
-                print('updating mapper')
 
                 pos_key = tuple(self.estimated_pos)
                 if pos_key in self.edge and len(self.edge[pos_key]):

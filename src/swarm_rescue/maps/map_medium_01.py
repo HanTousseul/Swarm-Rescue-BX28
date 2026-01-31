@@ -78,7 +78,7 @@ class MapMedium01(MapAbstract):
             angle = random.uniform(-math.pi, math.pi)
             self._drones_pos.append(((x, y), angle))
 
-        self._drones_pos = [((170,170), math.pi/2)]
+        self._drones_pos = [((-560,-30), math.pi/2)]
         self._drones: List[DroneAbstract] = []
 
         self._playground = ClosedPlayground(size=self._size_area)
