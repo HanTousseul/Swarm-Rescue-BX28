@@ -44,7 +44,7 @@ class ClosedPlayground(Playground):
             border_thickness (int): Thickness of the border walls.
         """
         background = (220, 220, 220)
-        use_shaders = True
+        use_shaders = False
         if platform.system() == "Darwin":
             use_shaders = False
 

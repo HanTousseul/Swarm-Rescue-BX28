@@ -207,6 +207,7 @@ class Launcher:
 
         my_gui = GuiSR(the_map=the_map,
                        draw_interactive=False,
+                       use_keyboard=True,
                        filename_video_capture=filename_video_capture,
                        headless=headless)
 
@@ -232,10 +233,10 @@ class Launcher:
             my_gui.close()
 
             # Clean up resources even in case of crash
-            if hasattr(the_map, 'playground') and the_map.playground:
-                the_map.playground.cleanup()
+            #if hasattr(the_map, 'playground') and the_map.playground:
+            #    the_map.playground.cleanup()
 
-            has_crashed = True
+            #has_crashed = True
         finally:
             if hide_solution_output:
                 sys.stdout.close()
@@ -257,8 +258,8 @@ class Launcher:
                                     num_round)
 
         # Clean up resources after the round to prevent memory leaks
-        if hasattr(the_map, 'playground') and the_map.playground:
-            the_map.playground.cleanup()
+        #if hasattr(the_map, 'playground') and the_map.playground:
+        #    the_map.playground.cleanup()
 
         # Clean up GUI resources
         if my_gui:
