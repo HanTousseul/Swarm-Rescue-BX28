@@ -207,7 +207,6 @@ class Launcher:
 
         my_gui = GuiSR(the_map=the_map,
                        draw_interactive=False,
-                       use_keyboard=True,
                        filename_video_capture=filename_video_capture,
                        headless=headless)
 

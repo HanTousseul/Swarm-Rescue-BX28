@@ -51,8 +51,10 @@ class MapMedium01(MapAbstract):
 
         self._wounded_persons_pos = [(-261, -257), (-145, -256), (-770, -254),
                                      (766, 252), (-479, 406), (-487, 477),
-                                     (-775, 490), (766, -352), (124,294), (300,188),
-                                     (298,142), (56,102), (107,53)]
+                                     (-775, 490), (766, -352)
+                                     #,(164,217),(125,293),(300,185),
+                                     #(298,140),(55,103),(106,53)
+                                     ]
 
         self._number_wounded_persons = len(self._wounded_persons_pos)
         self._wounded_persons: List[WoundedPerson] = []

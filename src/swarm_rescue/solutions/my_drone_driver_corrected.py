@@ -105,7 +105,9 @@ class MyStatefulDrone(DroneAbstract):
 
     def lidar_possible_paths(self) -> List:
         '''
-        Collect Lidar data, analyze and return a list of potential areas (Frontiers), sorted from the position highest to lowest difference between the actual angle of the drone, and the required angle to get to the potential area. 
+        Collect Lidar data, analyze and return a list of potential areas (Frontiers), sorted from the position highest
+        to lowest difference between the actual angle of the drone (to get the minimum angle difference, take the last one),
+        and the required angle to get to the potential area. 
         Returns None if there is no self.estimated_pos
         '''
         lidar_possible_paths = []
@@ -114,6 +116,7 @@ class MyStatefulDrone(DroneAbstract):
         step_forward = 132 #Distance that the drone will move forward from his actual position towards the possible path it chose
         angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
         edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
+        Same_possible_path = 50
 
         # Note: Should use estimated_pos instead of gps_values to avoid errors when GPS is lost
         coords = self.estimated_pos
@@ -146,7 +149,7 @@ class MyStatefulDrone(DroneAbstract):
 
                 node = np.array(elt)
 
-                if not visited and np.linalg.norm(position-node)<REACH_THRESHOLD:
+                if not visited and np.linalg.norm(position-node)<Same_possible_path:
                     visited = True
 
             if not(visited):
@@ -154,12 +157,12 @@ class MyStatefulDrone(DroneAbstract):
                 for elt in lidar_possible_angles:
                     node = np.array(elt[0])
                     
-                    if not(visited) and np.linalg.norm(position-node)<REACH_THRESHOLD:
+                    if not(visited) and np.linalg.norm(position-node)<Same_possible_path:
                         visited = True
 
             if not(visited):
 
-                if np.linalg.norm(position-coords)<REACH_THRESHOLD:
+                if np.linalg.norm(position-coords)<Same_possible_path:
                     visited = True
 
         def correct_position(mean_angle:float) -> Tuple:
@@ -481,7 +484,6 @@ class MyStatefulDrone(DroneAbstract):
         #     }
         # else:
         # #print(f'Spec of moving, forward: {forward_cmd}, rotation: {rotation_cmd}, dist: {dist_to_target}')
-        print(forward_cmd,rotation_cmd, self.current_target)
         return {
             "forward": forward_cmd, 
             "lateral": 0.0, 
@@ -573,7 +575,7 @@ class MyStatefulDrone(DroneAbstract):
                 # 2. Update Mapper (To find new paths)
                 if self.current_target is None: self.visit(self.estimated_pos)
                 self.update_mapper()
-
+                print('updating mapper')
 
                 pos_key = tuple(self.estimated_pos)
                 if pos_key in self.edge and len(self.edge[pos_key]):
@@ -654,7 +656,7 @@ class MyStatefulDrone(DroneAbstract):
             self.current_target = self.initial_position
 
         # 5. Execute movement
-        return self.move_to_target()
+        #return self.move_to_target()
         return
 
 
