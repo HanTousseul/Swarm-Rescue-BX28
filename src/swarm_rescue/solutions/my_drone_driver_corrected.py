@@ -162,10 +162,9 @@ class MyStatefulDrone(DroneAbstract):
                         visited = True
 
             if not(visited):
-                print('norm', np.linalg.norm(position-coords))
+
                 if np.linalg.norm(position-coords)<Same_possible_path:
                     visited = True
-            print('is_visited', (visited))
             return visited
 
         def correct_position(mean_angle:float) -> Tuple:
@@ -185,13 +184,12 @@ class MyStatefulDrone(DroneAbstract):
 
                     needs_correction = True
                     if lidar_data[ray%181] < min_dist + SAFE_DISTANCE: 
-                        print(True, lidar_data[ray%181], min_dist)
                         min_dist = lidar_data[ray%181] - SAFE_DISTANCE 
 
             if needs_correction:
-                print('needs correction',mean_angle)
-                print('index',index)
-                print(min_dist)
+                #print('needs correction',mean_angle)
+                #print('index',index)
+                #print('min_dit',min_dist)
 
                 new_pos = coords[0] + min_dist*np.cos(mean_angle), coords[1] + min_dist*np.sin(mean_angle)
 
@@ -201,7 +199,7 @@ class MyStatefulDrone(DroneAbstract):
             else: 
                 return None
 
-        def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward) -> Tuple:
+        def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
             '''
             Takes in two rays and outputs the position of the node to be added as well as the mean angle of the two rays.
             
@@ -226,17 +224,20 @@ class MyStatefulDrone(DroneAbstract):
             position:np.array = np.array([position_mean_angle[0], position_mean_angle[1]])
             mean_angle:float = position_mean_angle[2]
             visited = is_visited(position)
+            print('is_visited?', position, visited)
 
             if visited: return # we stop if path is already visited
 
             # correction refers to setting the node closer to the drone in case it is hidden by a wall for some reason
-            needs_correction = correct_position(mean_angle)  
-            print('position, needs correction',position, needs_correction)
+            needs_correction = correct_position(mean_angle) 
+            print('needs correction?', needs_correction) 
+            #print('position, needs correction',position, needs_correction)
             if needs_correction:
 
                 position = needs_correction[0] # we correct if needed
                 visited = is_visited(position)
-                print('Needs corrcetion, is visited?', visited)
+                print('It needs correction, is it now visited?', visited)
+                #print('Needs corrcetion, is visited?', visited)
                 if visited: return # if the corrected path is not worth adding
 
             # if the path is new (theoretically)
@@ -394,8 +395,6 @@ class MyStatefulDrone(DroneAbstract):
         
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
         print('list',lidar_possible_angles)
-        #for elt in lidar_possible_angles:
-        #    print('linalg norm', elt[0], np.linalg.norm(elt[0]-coords))
 
         lidar_possible_angles.reverse()
         return lidar_possible_angles

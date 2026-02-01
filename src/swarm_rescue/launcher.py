@@ -92,7 +92,7 @@ class Launcher:
                 self.eval_plan_ok = False
         else:
             # Use default_eval_plan.yml if no config_path is provided
-            default_config_path = os.path.join(os.path.dirname(__file__), '../../config/default_eval_plan.yml')
+            default_config_path = os.path.join(os.path.dirname(__file__), '../../config/final_2022_23_eval_plan.yml')
             default_config_path = os.path.abspath(default_config_path)
             if not os.path.exists(default_config_path):
                 print(f"\nError: No config_path provided and default config file not found at {default_config_path}.")

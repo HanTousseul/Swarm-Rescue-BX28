@@ -41,12 +41,12 @@ evaluation_plan:
 
   # Scenario 4: Medium map with 1 round, all special zones enabled
   - map_name: MapMedium01
-    nb_rounds: 1
+    nb_rounds: 0
     config_weight: 1
     zones_config: [NO_COM_ZONE, NO_GPS_ZONE, KILL_ZONE]
 
   # Scenario 5: Another medium map with 1 round, all special zones enabled
   - map_name: MapMedium02
-    nb_rounds: 0
+    nb_rounds: 1
     config_weight: 1
     zones_config: [NO_COM_ZONE, NO_GPS_ZONE, KILL_ZONE]
