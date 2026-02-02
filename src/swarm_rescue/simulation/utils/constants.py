@@ -29,5 +29,5 @@ WINDOW_AUTO_RESIZE_RATIO: float = 0.85
 
 # 'ENABLE_WINDOW_AUTO_RESIZE' allows to completely disable automatic window resizing
 # Set to False to disable auto-resize for all windows
-ENABLE_WINDOW_AUTO_RESIZE: bool = True
+ENABLE_WINDOW_AUTO_RESIZE: bool = False
 
