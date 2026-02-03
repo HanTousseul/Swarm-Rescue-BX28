@@ -15,7 +15,7 @@ from swarm_rescue.mapping.example_mapping import OccupancyGrid
 
 
 # --- CONFIGURATION ---
-SAFE_DISTANCE = 40      # Safe distance (pixels) to avoid collisions
+SAFE_DISTANCE = 30      # Safe distance (pixels) to avoid collisions
 KP_ROTATION = 2.0       # P coefficient for rotation
 KP_FORWARD = 0.5        # P coefficient for forward movement
 MAX_LIDAR_RANGE = 150   # Threshold to consider as "frontier"
@@ -187,7 +187,7 @@ class MyStatefulDrone(DroneAbstract):
             for ray in range(index - correct_position_nb_rays, index + 1 + correct_position_nb_rays):
 
                 if lidar_data[ray % 181] < step_forward + SAFE_DISTANCE:
-
+                    print('ray_needs_correction', ray, ray_angles[ray % 181])
                     needs_correction = True
 
                     if first_index == index - correct_position_nb_rays: 
@@ -231,7 +231,6 @@ class MyStatefulDrone(DroneAbstract):
 
                 if continuous: 
                     
-
                     if abs(first_index - index) < abs(last_index - index):
 
                         for ray in range(first_index - 10 - 1, first_index):
@@ -256,15 +255,20 @@ class MyStatefulDrone(DroneAbstract):
 
                             new_mean_angle = ray_angles[(first_index - 4) % 181]
 
+                print(
+                    'new_rays_continuity, new_mean_angle', new_rays_continuity, new_mean_angle
+                )
                 if not(continuous) or not(new_rays_continuity): 
 
-                    new_pos = coords[0] + min_dist*np.cos(new_mean_angle), coords[1] + min_dist*np.sin(new_mean_angle)
+                    new_pos = np.array(float(coords[0] + min_dist*np.cos(new_mean_angle)), 
+                                       float(coords[1] + min_dist*np.sin(new_mean_angle)))
 
                 else:
 
-                    new_pos = coords[0] + step_forward*np.cos(new_mean_angle), coords[1] + step_forward*np.sin(new_mean_angle)
-                return(new_pos, mean_angle)
-
+                    new_pos = np.array(float(coords[0] + step_forward*np.cos(new_mean_angle)),
+                                       float(coords[1] + step_forward*np.sin(new_mean_angle)))
+                    
+                return(new_pos, new_mean_angle)
 
         def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
             '''
@@ -278,7 +282,7 @@ class MyStatefulDrone(DroneAbstract):
             :type step_forward: float
             '''
             mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1]))+angle)
-            return ((coords[0] + step_forward * np.cos(mean_angle), coords[1] + step_forward * np.sin(mean_angle), mean_angle))     
+            return ((coords[0] + step_forward * np.cos(mean_angle), coords[1] + step_forward * np.sin(mean_angle), mean_angle))    
 
         def add_to_lidar_possible_angles(position_mean_angle: Tuple) -> None:
             '''
@@ -321,7 +325,7 @@ class MyStatefulDrone(DroneAbstract):
 
                 lidar_possible_angles.append((position, mean_angle))
 
-            print('computed', computed)
+            print('computed', (position,mean_angle))
             return
 
         for index in range(round(angle_ignore/2), 181 - round(angle_ignore/2) -1):
