@@ -274,7 +274,7 @@ class Navigator:
                     add_to_lidar_possible_angles(computed)
             
             if lidar_data[index+1]*edge_length > lidar_data[index]: #imagine a little room with a door flush in a wall. Might not be deep but we can use the fact that there will be two consecutive rays with a big gap
-                edge_begin = index+1, ray_angles[index+1]
+                edge_begin = index+1 , ray_angles [index+1]
                 #print('edge_begin', edge_begin)
 
             elif lidar_data[index+1] < lidar_data[index] * edge_length:
@@ -296,7 +296,7 @@ class Navigator:
 
                 if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end, we make sure that the rays are still hitting something
 
-                    edge_end = edge_begin[0] + extra_rays, ray_angles[edge_begin[0]+extra_rays]
+                    edge_end = (edge_begin[0] + extra_rays) % 181, ray_angles[(edge_begin[0]+extra_rays) % 181]
                     #print('call2, edge_begin')
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
@@ -307,7 +307,7 @@ class Navigator:
                     edge_end = None
 
             elif edge_end != None: # we found an edge_end but no edge_begin, we set edge_begin to be the 10th ray before edge_end.
-                edge_begin = edge_end[0]-extra_rays, ray_angles[edge_end[0]-extra_rays]
+                edge_begin = (edge_end[0]-extra_rays) % 181, ray_angles[(edge_end[0]-extra_rays) % 181]
             
                 #print('call2, edge_end')
                 computed = compute_position(edge_begin,edge_end,step_forward)

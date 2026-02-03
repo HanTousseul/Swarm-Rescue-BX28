@@ -4,8 +4,8 @@
 # Map included:
 #   - MapFinal2022_23: Final map from 2022-23 competition
 
-stat_saving_enabled: False   # Save statistics and generate PDF report (true/false)
-video_capture_enabled: False # Enable video recording of the mission (true/false)
+stat_saving_enabled: false   # Save statistics and generate PDF report (true/false)
+video_capture_enabled: false # Enable video recording of the mission (true/false)
 
 evaluation_plan:
   # Final Map 2022-23 - Basic scenario with multiple rounds

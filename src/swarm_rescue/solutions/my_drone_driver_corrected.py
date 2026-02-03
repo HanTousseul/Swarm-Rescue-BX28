@@ -137,6 +137,22 @@ class MyStatefulDrone(DroneAbstract):
         correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped 
         #centered around the possible path that are checked for minimum length
 
+        def index_lidar_ray(angle: float, mean_angle: float) -> int:
+            '''
+            Takes as parameter the angle of the drone and the absolute angle of a lidar ray,
+            return the index corresponding to that lidar ray in the list lidar_data 
+            
+            :param angle: angle of the drone
+            :type angle: float
+            :param mean_angle: absolute angle of the lidar ray
+            :type mean_angle: float
+            :return: index of the lidar ray in lidar_data
+            :rtype: int
+            '''
+            diff = (mean_angle - angle) % (2 * math.pi)
+            index = (180 + round(np.rad2deg(diff))) // 2
+            return index % 180
+
         def is_visited(position: Tuple) -> bool:
             '''
             function that returns True if the position is worth adding to list_possible_paths, False otherwise
@@ -180,10 +196,11 @@ class MyStatefulDrone(DroneAbstract):
             '''
             needs_correction: bool = False
             min_dist: float = step_forward
-            index: int = int(round(np.rad2deg(mean_angle),0))//2 + 90
+            index = index_lidar_ray(angle, mean_angle)
             first_index: int = index - correct_position_nb_rays
             last_index: int = index + correct_position_nb_rays
 
+            print('correct_position candidate', mean_angle, index)
             for ray in range(index - correct_position_nb_rays, index + 1 + correct_position_nb_rays):
 
                 if lidar_data[ray % 181] < step_forward + SAFE_DISTANCE:
@@ -201,6 +218,7 @@ class MyStatefulDrone(DroneAbstract):
                     if lidar_data[ray % 181] < min_dist + SAFE_DISTANCE: 
                         min_dist = lidar_data[ray % 181] - SAFE_DISTANCE 
 
+            print('needs_correction?', mean_angle, needs_correction)
             if not(needs_correction): return None
 
             else:
@@ -260,14 +278,14 @@ class MyStatefulDrone(DroneAbstract):
                 )
                 if not(continuous) or not(new_rays_continuity): 
 
-                    new_pos = np.array(float(coords[0] + min_dist*np.cos(new_mean_angle)), 
-                                       float(coords[1] + min_dist*np.sin(new_mean_angle)))
+                    new_pos = np.array((float(coords[0] + min_dist*np.cos(new_mean_angle)), 
+                                       float(coords[1] + min_dist*np.sin(new_mean_angle))))
 
                 else:
 
-                    new_pos = np.array(float(coords[0] + step_forward*np.cos(new_mean_angle)),
-                                       float(coords[1] + step_forward*np.sin(new_mean_angle)))
-                    
+                    new_pos = np.array((float(coords[0] + step_forward*np.cos(new_mean_angle)),
+                                       float(coords[1] + step_forward*np.sin(new_mean_angle))))
+                return None
                 return(new_pos, new_mean_angle)
 
         def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
@@ -281,8 +299,12 @@ class MyStatefulDrone(DroneAbstract):
             :param step_forward distance between the drone and the new possible path
             :type step_forward: float
             '''
-            mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1]))+angle)
-            return ((coords[0] + step_forward * np.cos(mean_angle), coords[1] + step_forward * np.sin(mean_angle), mean_angle))    
+            mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1])))
+            print('mean_angle', mean_angle, Ray1, Ray2)
+            Trueangle = mean_angle + angle
+
+
+            return ((coords[0] + step_forward * np.cos(Trueangle), coords[1] + step_forward * np.sin(Trueangle), mean_angle))    
 
         def add_to_lidar_possible_angles(position_mean_angle: Tuple) -> None:
             '''
@@ -298,6 +320,7 @@ class MyStatefulDrone(DroneAbstract):
 
             if visited: return # we stop if path is already visited
 
+            print('sending candidate to correct', position, mean_angle)
             # correction refers to setting the node closer to the drone in case it is hidden by a wall for some reason
             needs_correction = correct_position(mean_angle) 
             #print('position, needs correction',position, needs_correction)
@@ -358,7 +381,7 @@ class MyStatefulDrone(DroneAbstract):
                 #print('edge_end',edge_end)
                 if edge_begin != None: 
 
-                    #print('call2, edge_begin and edge_end')
+                    print('call2, edge_begin and edge_end', edge_begin, edge_end)
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
                     lidar_possible_paths.append(computed)
@@ -369,7 +392,7 @@ class MyStatefulDrone(DroneAbstract):
 
             if edge_begin != None:
 
-                if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end, we make sure that the rays are still hitting something
+                if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end
 
                     edge_end = edge_begin[0] + extra_rays, ray_angles[edge_begin[0]+extra_rays]
                     #print('call2, edge_begin')
@@ -382,9 +405,9 @@ class MyStatefulDrone(DroneAbstract):
                     edge_end = None
 
             elif edge_end != None: # we found an edge_end but no edge_begin, we set edge_begin to be the 10th ray before edge_end.
-                edge_begin = edge_end[0]-extra_rays, ray_angles[edge_end[0]-extra_rays]
+                edge_begin = (edge_end[0]-extra_rays) % 181, ray_angles[(edge_end[0]-extra_rays) % 181]
             
-                #print('call2, edge_end')
+                print('call2, edge_end')
                 computed = compute_position(edge_begin,edge_end,step_forward)
                 lidar_possible_paths.append(computed)
                 add_to_lidar_possible_angles(computed)

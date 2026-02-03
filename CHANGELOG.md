@@ -3,6 +3,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [5.1.3] - 2026-02-03
+
+### Fixed
+- bug fix : dead drones were not visible by other drones with the semantic sensor
+- bug fix : crash with semantic visualization when a drone is dead
+
+## [5.1.2] - 2025-11-27
+
+### Fixed
+- Correct evaluation guidelines
+
+## [5.1.1] - 2025-11-18
+
+### Fixed
+- Fix crash when cleanup memory after a round
+
 ## [5.1.0] - 2025-01-21
 
 ### Added

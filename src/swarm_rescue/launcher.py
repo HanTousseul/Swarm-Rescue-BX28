@@ -31,7 +31,7 @@ from swarm_rescue.maps.map_test_special_zones import MapTestSpecialZones
 from swarm_rescue.solutions.my_drone_eval import MyDroneEval
 
 
-class MyDrone(MyDroneEval):    
+class MyDrone(MyDroneEval):
     """Custom drone class for evaluation."""
     pass
 
@@ -232,10 +232,15 @@ class Launcher:
             my_gui.close()
 
             # Clean up resources even in case of crash
-            #if hasattr(the_map, 'playground') and the_map.playground:
-            #    the_map.playground.cleanup()
+            if hasattr(the_map, 'playground') and the_map.playground:
+                the_map.playground.cleanup()
+                # ensure window is closed as well (safe no-op if already closed)
+                try:
+                    the_map.playground.close_window()
+                except Exception:
+                    pass
 
-            #has_crashed = True
+            has_crashed = True
         finally:
             if hide_solution_output:
                 sys.stdout.close()
@@ -257,12 +262,13 @@ class Launcher:
                                     num_round)
 
         # Clean up resources after the round to prevent memory leaks
-        #if hasattr(the_map, 'playground') and the_map.playground:
-        #    the_map.playground.cleanup()
-
-        # Clean up GUI resources
-        if my_gui:
-            my_gui.close()
+        if hasattr(the_map, 'playground') and the_map.playground:
+            the_map.playground.cleanup()
+            # explicitly close the GUI window associated with the playground
+            try:
+                the_map.playground.close_window()
+            except Exception:
+                pass
 
         return (my_gui.percent_drones_destroyed,
                 my_gui.mean_drones_health,
