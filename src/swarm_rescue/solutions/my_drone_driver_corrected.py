@@ -135,23 +135,7 @@ class MyStatefulDrone(DroneAbstract):
         minimal_distance = np.mean(np.array(lidar_data)) * minimal_distance_coefficient #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
         extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
         correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped 
-        #centered around the possible path that are checked for minimum length
-
-        def index_lidar_ray(angle: float, mean_angle: float) -> int:
-            '''
-            Takes as parameter the angle of the drone and the absolute angle of a lidar ray,
-            return the index corresponding to that lidar ray in the list lidar_data 
-            
-            :param angle: angle of the drone
-            :type angle: float
-            :param mean_angle: absolute angle of the lidar ray
-            :type mean_angle: float
-            :return: index of the lidar ray in lidar_data
-            :rtype: int
-            '''
-            diff = (mean_angle - angle) % (2 * math.pi)
-            index = (180 + round(np.rad2deg(diff))) // 2
-            return index % 180
+        #centered around the possible path that are checked for minimum length 
 
         def is_visited(position: Tuple) -> bool:
             '''
@@ -196,9 +180,9 @@ class MyStatefulDrone(DroneAbstract):
             '''
             needs_correction: bool = False
             min_dist: float = step_forward
-            index = index_lidar_ray(angle, mean_angle)
+            index: int = (round(np.rad2deg(mean_angle)) // 2 + 90) % 180
             first_index: int = index - correct_position_nb_rays
-            last_index: int = index + correct_position_nb_rays
+            last_index: int = index + correct_position_nb_rays + 1
 
             print('correct_position candidate', mean_angle, index)
             for ray in range(index - correct_position_nb_rays, index + 1 + correct_position_nb_rays):
@@ -231,12 +215,16 @@ class MyStatefulDrone(DroneAbstract):
             # we make the possible path closer
 
                 continuous:bool = True
+                
+                #if last_index == index + correct_position_nb_rays + 1:
+
+
 
                 for ray in range(first_index, last_index+1):
 
                     if lidar_data[ray % 181] > step_forward + SAFE_DISTANCE:
 
-                        print('discontinuity 1', ray_angles[ray % 181], lidar_data[ray % 181])
+                        print('discontinuity 1', ray, ray_angles[ray % 181], lidar_data[ray % 181])
 
                         continuous = False
 
