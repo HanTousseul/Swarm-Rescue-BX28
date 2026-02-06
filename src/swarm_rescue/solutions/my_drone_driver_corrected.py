@@ -458,9 +458,6 @@ class MyStatefulDrone(DroneAbstract):
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
         print('list',lidar_possible_angles)
         lidar_possible_angles.reverse()
-
-        lidar_possible_angles = [((-574.0385348898396, -491.4813036300343),-1.919862177193762)]
-
         return lidar_possible_angles
 
     def update_mapper(self):
