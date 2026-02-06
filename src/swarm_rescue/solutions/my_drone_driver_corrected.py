@@ -110,32 +110,30 @@ class MyStatefulDrone(DroneAbstract):
         and the required angle to get to the potential area. 
         Returns None if there is no self.estimated_pos
         '''
-        lidar_possible_paths = []
-        lidar_possible_angles = [] #Allows us to sort the possible paths by absolute value of angle
-        minimal_distance_coefficient = 1.2 #coefficient by which we multiply the average length of lidar rays to find the minimal distance
-        step_forward = 132 #Distance that the drone will move forward from his actual position towards the possible path it chose
-        angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
-        edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
-        Same_possible_path = 50
-
-        # Note: Should use estimated_pos instead of gps_values to avoid errors when GPS is lost
-        coords = self.estimated_pos
-        angle = self.estimated_angle
-    
-        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set
 
         lidar_data = self.lidar_values()
         ray_angles = self.lidar_rays_angles()
+        lidar_possible_angles = [] #Allows us to sort the possible paths by absolute value of angle
+        minimal_distance_coefficient = 1.2 #coefficient by which we multiply the average length of lidar rays to find the minimal distance
+        minimal_distance = min(np.mean(np.array(lidar_data)) * minimal_distance_coefficient, 190) #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
+        step_forward = 132 #Distance that the drone will move forward from his actual position towards the possible path it chose
+        angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
+        edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
+        Same_possible_path = 50 #Maximum distance between two possible paths for them to be considered as the same 
+
+        coords = self.estimated_pos
+        angle = self.estimated_angle
+    
+        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set (which should not happen)
+
         begin_loop = False # if the last consecutive rays hit a wall
         end_of_loop = False # if the first consecutive rays hit a wall
         min_ray = 0,False
         max_ray = 180, False
         edge_begin = None
         edge_end = None
-        minimal_distance = np.mean(np.array(lidar_data)) * minimal_distance_coefficient #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
         extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
-        correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped 
-        #centered around the possible path that are checked for minimum length 
+        correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped centered around the possible path that are checked for minimum length 
 
         def is_visited(position: Tuple) -> bool:
             '''
@@ -339,7 +337,6 @@ class MyStatefulDrone(DroneAbstract):
                     #print('call1')
                     #print('min_ray,max_ray', min_ray,max_ray)
                     computed = compute_position(min_ray,max_ray,step_forward)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
             
             if lidar_data[index+1]*edge_length > lidar_data[index]: #imagine a little room with a door flush in a wall. Might not be deep but we can use the fact that there will be two consecutive rays with a big gap
@@ -355,7 +352,6 @@ class MyStatefulDrone(DroneAbstract):
                     print('call2, edge_begin and edge_end', edge_begin, edge_end)
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
 
                     edge_begin = None
@@ -369,7 +365,6 @@ class MyStatefulDrone(DroneAbstract):
                     #print('call2, edge_begin')
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
 
                     edge_begin = None
@@ -380,7 +375,6 @@ class MyStatefulDrone(DroneAbstract):
             
                 print('call2, edge_end')
                 computed = compute_position(edge_begin,edge_end,step_forward)
-                lidar_possible_paths.append(computed)
                 add_to_lidar_possible_angles(computed)
 
                 edge_begin = None
@@ -410,7 +404,6 @@ class MyStatefulDrone(DroneAbstract):
             #print('end_of_loop', end_of_loop)
             #print('call3 param', begin_loop, (index, ray_angles[index%180]))
             computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
 
             if not(end_of_loop_bool):
@@ -424,7 +417,6 @@ class MyStatefulDrone(DroneAbstract):
                 #print('call4')
                 #print('call4 params',(index % 180, ray_angles[index % 180]), end_of_loop )
                 computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-                lidar_possible_paths.append(computed)
                 add_to_lidar_possible_angles(computed)
 
         elif begin_loop != False and end_of_loop == False:
@@ -438,7 +430,6 @@ class MyStatefulDrone(DroneAbstract):
             #print('call5')
             #print(begin_loop, (index, ray_angles[index % 180]))
             computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
 
         elif begin_loop == False and end_of_loop != False:
@@ -452,11 +443,10 @@ class MyStatefulDrone(DroneAbstract):
             index+=1
             #print('call6')
             computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
         
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
-        print('list',lidar_possible_angles)
+        #print('list',lidar_possible_angles)
         lidar_possible_angles.reverse()
         return lidar_possible_angles
 
