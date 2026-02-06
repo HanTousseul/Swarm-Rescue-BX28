@@ -56,7 +56,6 @@ class MapFinal2022_23(MapAbstract):
              (-538, 265), (-450, -55), (850, -41), (-550, -365), (-370, -365),
              (840, -385), (840, -625), (320, -495), (-110, -615), (-202, -615),
              (-850, -615)
-             #,(-771,-339),(-575,-496),(-739,-576)
             ]
         self._number_wounded_persons = len(self._wounded_persons_pos)
         self._wounded_persons: List[WoundedPerson] = []

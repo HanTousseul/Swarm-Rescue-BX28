@@ -181,12 +181,12 @@ class MyStatefulDrone(DroneAbstract):
             min_dist: float = step_forward
             index: int = (round(np.rad2deg(mean_angle)) // 2 + 90) % 180
             is_first_index: bool = False
-            print('correct_position_call', mean_angle)
+            #print('correct_position_call', mean_angle)
             for ray in range(index - correct_position_nb_rays, index + correct_position_nb_rays + 1):
 
                 if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
 
-                    print('first_needs_correction',ray, lidar_data[ray % 180])
+                    #print('first_needs_correction',ray, lidar_data[ray % 180])
                     min_dist = lidar_data[ray % 180] - SAFE_DISTANCE
                     if not(is_first_index):
 
@@ -198,14 +198,14 @@ class MyStatefulDrone(DroneAbstract):
                         last_index = ray
 
 
-            print('needs correction?', is_first_index, min_dist)
+            #print('needs correction?', is_first_index, min_dist)
             if not(is_first_index): return None
 
             if first_index == index - correct_position_nb_rays and last_index == index + correct_position_nb_rays + 1: 
-                print('needs correction? No')
+                #print('needs correction? No')
                 return coords
             
-            print('it does need correction', index, first_index, last_index)
+            #print('it does need correction', index, first_index, last_index)
             continuity: bool = True
 
             for ray in range(first_index, last_index):
@@ -228,22 +228,32 @@ class MyStatefulDrone(DroneAbstract):
                 for ray in range(interval_correction[0], interval_correction[1]):
 
                     if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
-                        print(ray, lidar_data[ray % 180])
+                        #print(ray, lidar_data[ray % 180])
                         interval_correction_continuity = False
 
             if not(continuity) or not(interval_correction_continuity): 
 
                 new_pos = np.array((float(coords[0] + min_dist*np.cos(mean_angle)), 
                                     float(coords[1] + min_dist*np.sin(mean_angle))))
-                print('new_if', continuity, first_index, last_index, new_pos, mean_angle)
+                #print('new_if', continuity, first_index, last_index, new_pos, mean_angle)
                 return (new_pos, mean_angle)
 
             else:
 
-                new_mean_angle = normalize_angle(circmean((ray_angles[interval_correction[0]], ray_angles[interval_correction[1]])))
-                new_pos = np.array((float(coords[0] + step_forward*np.cos(new_mean_angle)),
-                                    float(coords[1] + step_forward*np.sin(new_mean_angle))))
-                print('new_else', continuity, interval_correction, interval_correction_continuity, first_index, last_index, new_pos, new_mean_angle)
+                #print('aaaaaaaaaaaaaaaaaaaaaaaaaa',
+                #    (interval_correction[0], ray_angles[interval_correction[0]]),
+                #    (interval_correction[1], ray_angles[interval_correction[1]]),
+                #    step_forward)
+                computed_position = compute_position(
+                    (interval_correction[0], ray_angles[interval_correction[0]]),
+                    (interval_correction[1], ray_angles[interval_correction[1]]),
+                    step_forward = step_forward
+                    )
+                
+                new_pos = computed_position[0], computed_position[1]
+                new_mean_angle = computed_position[2]
+                
+                #print('new_else', continuity, interval_correction, interval_correction_continuity, first_index, last_index, new_pos, new_mean_angle)
                 return(new_pos, new_mean_angle)
 
         def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
@@ -252,9 +262,9 @@ class MyStatefulDrone(DroneAbstract):
             
             :param Ray1: The first ray of the position
             :type Ray1: Tuple (index, ray_angle[index])
-            :param Ray2 The last ray of the position
+            :param Ray2: The last ray of the position
             :type Ray2: Tuple (index, ray_angle[index])
-            :param step_forward distance between the drone and the new possible path
+            :param step_forward: distance between the drone and the new possible path
             :type step_forward: float
             '''
             mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1])))
@@ -262,7 +272,10 @@ class MyStatefulDrone(DroneAbstract):
             Trueangle = mean_angle + angle
 
 
-            return ((coords[0] + step_forward * np.cos(Trueangle), coords[1] + step_forward * np.sin(Trueangle), mean_angle))    
+            return (float((coords[0] + step_forward * np.cos(Trueangle))), 
+                    float(coords[1] + step_forward * np.sin(Trueangle)), 
+                    mean_angle
+                    )    
 
         def add_to_lidar_possible_angles(position_mean_angle: Tuple) -> None:
             '''
@@ -272,7 +285,7 @@ class MyStatefulDrone(DroneAbstract):
             :type position_mean_angle: Tuple
             '''
             visited:bool = False #if the node has been visited or not
-            position:np.array = np.array([position_mean_angle[0], position_mean_angle[1]])
+            position:tuple = (position_mean_angle[0], position_mean_angle[1])
             mean_angle:float = position_mean_angle[2]
             visited = is_visited(position)
 
@@ -445,6 +458,9 @@ class MyStatefulDrone(DroneAbstract):
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
         print('list',lidar_possible_angles)
         lidar_possible_angles.reverse()
+
+        lidar_possible_angles = [((-574.0385348898396, -491.4813036300343),-1.919862177193762)]
+
         return lidar_possible_angles
 
     def update_mapper(self):
@@ -711,7 +727,7 @@ class MyStatefulDrone(DroneAbstract):
             self.current_target = self.initial_position
 
         # 5. Execute movement
-        #return self.move_to_target()
+        return self.move_to_target()
         return
 
 
