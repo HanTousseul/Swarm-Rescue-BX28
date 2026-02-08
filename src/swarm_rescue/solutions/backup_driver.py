@@ -156,6 +156,9 @@ class MyStatefulDrone(DroneAbstract):
 
         if not self.lidar_is_disabled():
             lidar_data = self.lidar_values()
+            # [FIX CRASH] Thêm dòng này vào
+            if lidar_data is None: 
+                return []
             ray_angles = self.lidar_rays_angles()
             
             for i in range(22, len(lidar_data) - 22):
@@ -435,7 +438,7 @@ class MyStatefulDrone(DroneAbstract):
         # Trường hợp 2: Đang đi cứu (RESCUING) -> Chỉ mở càng khi đã đến gần (< 20px)
         # Để tránh bay ngang qua thằng khác rồi cướp người của nó
         elif self.state == "RESCUING":
-            if dist_to_target <= 15.0:
+            if dist_to_target <= 12.0:
                 grasper_val = 1
             else:
                 grasper_val = 0
@@ -539,6 +542,10 @@ class MyStatefulDrone(DroneAbstract):
         # Cách đơn giản hơn: Duyệt qua các tia Lidar xem tia nào trùng góc
         lidar_data = self.lidar_values()
         ray_angles = self.lidar_rays_angles()
+
+        # [FIX CRASH] Nếu vào Kill Zone, Lidar sẽ trả về None -> Return False luôn để tránh lỗi
+        if lidar_data is None or ray_angles is None:
+            return False
         
         # Tìm tia gần nhất với hướng target
         min_diff = float('inf')
@@ -703,6 +710,7 @@ class MyStatefulDrone(DroneAbstract):
             # print(f"Drone {self.identifier}: 🚨 TIME ALERT ({steps_remaining} left)! Force RETURNING.")
             self.state = "RETURNING"
             self.not_grapsed = True
+            self.current_target = self.rescue_center_pos
 
         # 4. STATE MACHINE
         
@@ -808,17 +816,17 @@ class MyStatefulDrone(DroneAbstract):
                 
                 self.state = "RETURNING"
                 # Lúc này position_before_rescue đóng vai trò là điểm đầu tiên của hành trình về
-                self.current_target = self.position_before_rescue
+                self.current_target = self.rescue_center_pos
 
         # --- RETURNING ---
         elif self.state == "RETURNING":
             # Check xem đã về đến điểm xuất phát chưa?
-            dist_to_home = np.linalg.norm(self.estimated_pos - self.initial_position)
+            dist_to_home = np.linalg.norm(self.estimated_pos - self.rescue_center_pos)
             
             # Điều kiện chuyển sang END_GAME:
             # - Đã về rất gần nhà (< 25px)
             # - VÀ đang trong tình trạng sắp hết giờ (để phân biệt với việc về nhà cất người xong đi tiếp)
-            if dist_to_home < REACH_THRESHOLD and steps_remaining <= RETURN_TRIGGER_STEPS:
+            if dist_to_home < 50 and steps_remaining <= RETURN_TRIGGER_STEPS:
                 # print(f"Drone {self.identifier}: Đã về nhà an toàn. Chuyển sang END_GAME.")
                 self.state = "END_GAME"
                 self.current_target = None # Reset target để END_GAME tự xử lý
@@ -838,7 +846,7 @@ class MyStatefulDrone(DroneAbstract):
                     # Dừng lại chờ (hoặc lùi nhẹ nếu đứng quá sát < 80px để nhường chỗ cho con bên trong đi ra)
                     dist_to_center = np.linalg.norm(self.estimated_pos - self.rescue_center_pos)
                     
-                    forward_val = -0.3
+                    forward_val = -1
                     
                     return {
                         "forward": forward_val, 
@@ -1110,4 +1118,4 @@ class MyStatefulDrone(DroneAbstract):
                 # # print(f"Drone {self.identifier}: Found SHORTCUT to {target_pos}!")
                 return target_pos
                 
-        return None # Không tìm được đường tắt nào ngon hơn current_target
+        return None # Không tìm được đường tắt nào ngon hơn current_target  

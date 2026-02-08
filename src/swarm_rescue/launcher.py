@@ -31,7 +31,7 @@ from swarm_rescue.maps.map_test_special_zones import MapTestSpecialZones
 from swarm_rescue.solutions.my_drone_eval import MyDroneEval
 
 
-class MyDrone(MyDroneEval):    
+class MyDrone(MyDroneEval):
     """Custom drone class for evaluation."""
     pass
 
@@ -92,7 +92,7 @@ class Launcher:
                 self.eval_plan_ok = False
         else:
             # Use default_eval_plan.yml if no config_path is provided
-            default_config_path = os.path.join(os.path.dirname(__file__), '../../config/default_eval_plan.yml')
+            default_config_path = os.path.join(os.path.dirname(__file__), '../../config/final_2022_23_eval_plan.yml')
             default_config_path = os.path.abspath(default_config_path)
             if not os.path.exists(default_config_path):
                 print(f"\nError: No config_path provided and default config file not found at {default_config_path}.")
@@ -234,6 +234,11 @@ class Launcher:
             # Clean up resources even in case of crash
             if hasattr(the_map, 'playground') and the_map.playground:
                 the_map.playground.cleanup()
+                # ensure window is closed as well (safe no-op if already closed)
+                try:
+                    the_map.playground.close_window()
+                except Exception:
+                    pass
 
             has_crashed = True
         finally:
@@ -259,10 +264,11 @@ class Launcher:
         # Clean up resources after the round to prevent memory leaks
         if hasattr(the_map, 'playground') and the_map.playground:
             the_map.playground.cleanup()
-
-        # Clean up GUI resources
-        if my_gui:
-            my_gui.close()
+            # explicitly close the GUI window associated with the playground
+            try:
+                the_map.playground.close_window()
+            except Exception:
+                pass
 
         return (my_gui.percent_drones_destroyed,
                 my_gui.mean_drones_health,
