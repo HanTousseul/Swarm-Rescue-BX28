@@ -26,6 +26,11 @@ class Navigator:
         gps_pos = self.drone.measured_gps_position()
         compass_angle = self.drone.measured_compass_angle()
         
+        if self.drone.visited_nodes_should_be_emptied == True:
+
+            self.drone.visited_nodes_should_be_emptied = False
+            self.visited_node = []
+
         if gps_pos is not None and compass_angle is not None:
             self.drone.estimated_pos = gps_pos
             self.drone.estimated_angle = compass_angle
