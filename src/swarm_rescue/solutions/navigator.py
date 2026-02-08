@@ -25,11 +25,6 @@ class Navigator:
         """Update estimated position from GPS or Odometer (Dead Reckoning)."""
         gps_pos = self.drone.measured_gps_position()
         compass_angle = self.drone.measured_compass_angle()
-        
-        if self.drone.visited_nodes_should_be_emptied == True:
-
-            self.drone.visited_nodes_should_be_emptied = False
-            self.visited_node = []
 
         if gps_pos is not None and compass_angle is not None:
             self.drone.estimated_pos = gps_pos
@@ -69,7 +64,8 @@ class Navigator:
         angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
         edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
         Same_possible_path = 50 #Maximum distance between two possible paths for them to be considered as the same 
-        already_visited_path = 50 #Distance above which a new possible path will be considered valid if its distance with an already visited path is greather than already visited path
+        already_visited_path = 75 #Distance above which a new possible path will be considered valid if its distance with an already visited path is greather than already visited path
+        rescuing_bool:bool = self.drone.state == 'RESCUING'
 
         coords = self.drone.estimated_pos
         angle = self.drone.estimated_angle
@@ -85,6 +81,7 @@ class Navigator:
         extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
         correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped centered around the possible path that are checked for minimum length 
 
+
         #print('position', coords, angle)
         def is_visited(position: Tuple) -> bool:
             '''
@@ -94,7 +91,7 @@ class Navigator:
             :param position: (x,y) coordinates of the new possible path considered
             :type position: Tuple
             :return: whether or not the position is worth adding to the list
-            :rtype: bool
+            :rtype: bool            
             '''
             visited = False
             for elt in self.visited_node:
@@ -236,7 +233,11 @@ class Navigator:
             visited:bool = False #if the node has been visited or not
             position:tuple = (position_mean_angle[0], position_mean_angle[1])
             mean_angle:float = position_mean_angle[2]
-            visited = is_visited(position)
+
+            if not(rescuing_bool): 
+                visited = is_visited(position)
+
+            else: visited = True
 
             if visited: return # we stop if path is already visited
 
@@ -247,7 +248,9 @@ class Navigator:
             if needs_correction:
 
                 position = needs_correction[0] # we correct if needed
-                visited = is_visited(position)
+                if not(rescuing_bool):
+                    visited = is_visited(position)
+                else: visited = True
                 #print('Needs corrcetion, is visited?', visited)
                 if visited: return # if the corrected path is not worth adding
 
@@ -411,13 +414,14 @@ class Navigator:
         #print('list',lidar_possible_angles)
         #print(lidar_possible_angles)
         lidar_possible_angles.reverse()
+        
+        if self.drone.state == 'RESCUING': 
+            print(coords, lidar_possible_angles)
         return lidar_possible_angles
 
     def update_mapper(self):
         """Build a map of visited points (Graph Building)."""
-        print('update mapper')
         list_possible_area = self.lidar_possible_paths()
-        print(list_possible_area)
         # Use Int Key to avoid float precision errors
         pos_key = (int(self.drone.estimated_pos[0]), int(self.drone.estimated_pos[1]))
         

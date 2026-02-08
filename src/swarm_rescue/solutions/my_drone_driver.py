@@ -43,7 +43,6 @@ class MyStatefulDrone(DroneAbstract):
         self.estimated_angle = 0.0
         self.gps_last_known = None 
         
-        self.visited_nodes_should_be_emptied:bool = False
         # [MỚI] List lưu lịch sử vị trí để phát hiện kẹt lâu dài (100 steps)
         self.pos_history_long = []
 
@@ -170,14 +169,12 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- EXPLORING ---
         if self.state == "EXPLORING":
-            self.visited_nodes_should_be_emptied = False
             if self.found_person_pos is not None:
                 if self.comms.is_target_taken_or_better_candidate(self.found_person_pos):
                     self.nav.visit(self.found_person_pos) 
                     self.found_person_pos = None 
                 else:
                     self.state = "RESCUING"
-                    self.visited_nodes_should_be_emptied = True
                     self.position_before_rescue = self.current_target 
                     if self.position_before_rescue is None: self.position_before_rescue = self.estimated_pos
                     self.current_target = self.found_person_pos

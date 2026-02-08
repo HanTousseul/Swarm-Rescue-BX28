@@ -26,10 +26,10 @@ class Pilot:
 
     def calculate_repulsive_force(self):
         """
-        Chỉ tính toán lực để lấy component Lateral (né tránh).
+        Only calculate the force to get the Lateral (dodge) component.
         """
         total_lat = 0.0
-        # total_fwd ta không cần dùng nữa, nhưng vẫn tính để logic vortex hoạt động đúng
+        #We no longer need the total_fwd, but we still include it to ensure the vortex logic works correctly.
         
         semantic_data = self.drone.semantic_values()
         if not semantic_data: return 0.0, 0.0
@@ -41,8 +41,8 @@ class Pilot:
                 if 0.1 < dist < 120.0:
                     drone_count_nearby += 1
                     
-                    # Hệ số lực K. 
-                    # Vì không còn lực hãm forward, ta cần lateral đủ mạnh để né kịp.
+                    # Force coefficient K. 
+                    # Since there is no longer forward braking force, we need a sufficiently strong lateral force to dodge in time.                    
                     K = 400.0 
                     if self.drone.not_grapsed: K = 0
                     
@@ -55,10 +55,10 @@ class Pilot:
 
                     push_angle = data.angle + math.pi - VORTEX_ANGLE
                     
-                    # total_fwd += ... (Bỏ qua, không dùng)
+                    # total_fwd += ... (ignore, do not use)
                     total_lat += force_magnitude * math.sin(push_angle)
         
-        return 0.0, total_lat # Chỉ trả về lateral
+        return 0.0, total_lat # Returns only lateral
     
     def move_to_target_PID(self) -> CommandsDict:
         """
