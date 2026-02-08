@@ -51,16 +51,15 @@ class MapMedium01(MapAbstract):
 
         self._wounded_persons_pos = [(-261, -257), (-145, -256), (-770, -254),
                                      (766, 252), (-479, 406), (-487, 477),
-                                     (-775, 490), (766, -352)
-                                    ]
+                                     (-775, 490), (766, -352)]
 
         self._number_wounded_persons = len(self._wounded_persons_pos)
         self._wounded_persons: List[WoundedPerson] = []
 
         # POSITIONS OF THE DRONES
-        self._number_drones = 1
+        self._number_drones = 10
         # They are positioned in a square whose side size depends on the total number of drones.
-        start_area_drones = (210,40)
+        start_area_drones = (-580, -400)
         nb_per_side = math.ceil(math.sqrt(float(self._number_drones)))
         dist_inter_drone = 40.0
         # print("nb_per_side", nb_per_side)
@@ -76,7 +75,6 @@ class MapMedium01(MapAbstract):
             angle = random.uniform(-math.pi, math.pi)
             self._drones_pos.append(((x, y), angle))
 
-        self._drones_pos = [((-560,-30), math.pi/2)]
         self._drones: List[DroneAbstract] = []
 
         self._playground = ClosedPlayground(size=self._size_area)

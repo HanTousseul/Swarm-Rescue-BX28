@@ -55,31 +55,32 @@ class Navigator:
         and the required angle to get to the potential area. 
         Returns None if there is no self.estimated_pos
         '''
-        lidar_possible_paths = []
+        lidar_data = self.drone.lidar_values()
+        ray_angles = self.drone.lidar_rays_angles()
         lidar_possible_angles = [] #Allows us to sort the possible paths by absolute value of angle
         minimal_distance_coefficient = 1.2 #coefficient by which we multiply the average length of lidar rays to find the minimal distance
+        minimal_distance = min(np.mean(np.array(lidar_data)) * minimal_distance_coefficient, 190) #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
         step_forward = 132 #Distance that the drone will move forward from his actual position towards the possible path it chose
         angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
         edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
-        Same_possible_path = 50
+        Same_possible_path = 50 #Maximum distance between two possible paths for them to be considered as the same 
+        already_visited_path = 50 #Distance above which a new possible path will be considered valid if its distance with an already visited path is greather than already visited path
 
-        # Note: Should use estimated_pos instead of gps_values to avoid errors when GPS is lost
         coords = self.drone.estimated_pos
         angle = self.drone.estimated_angle
-        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set
+    
+        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set (which should not happen)
 
-        lidar_data = self.drone.lidar_values()
-        ray_angles = self.drone.lidar_rays_angles()
         begin_loop = False # if the last consecutive rays hit a wall
         end_of_loop = False # if the first consecutive rays hit a wall
         min_ray = 0,False
         max_ray = 180, False
         edge_begin = None
         edge_end = None
-        minimal_distance = np.mean(np.array(lidar_data)) * minimal_distance_coefficient #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
         extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
-        correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped 
-        #centered around the possible path that are checked for minimum length
+        correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped centered around the possible path that are checked for minimum length 
+
+        print('position', coords, angle)
         def is_visited(position: Tuple) -> bool:
             '''
             function that returns True if the position is worth adding to list_possible_paths, False otherwise
@@ -95,7 +96,7 @@ class Navigator:
 
                 node = np.array(elt)
 
-                if not visited and np.linalg.norm(position-node)<Same_possible_path:
+                if not visited and np.linalg.norm(position-node)<already_visited_path:
                     visited = True
 
             if not(visited):
@@ -121,80 +122,82 @@ class Navigator:
             :return: ((x,y),mean_angle) corrected new possible path
             :rtype: Tuple
             '''
-            needs_correction: bool = False
             min_dist: float = step_forward
-            index: int = int(round(np.rad2deg(mean_angle),0))//2 + 90
-            first_index: int = index - correct_position_nb_rays
-            last_index: int = index + correct_position_nb_rays
+            index: int = (round(np.rad2deg(mean_angle)) // 2 + 90) % 180
+            is_first_index: bool = False
+            #print('correct_position_call', mean_angle)
+            for ray in range(index - correct_position_nb_rays, index + correct_position_nb_rays + 1):
 
-            for ray in range(index - correct_position_nb_rays, index + 1 + correct_position_nb_rays):
+                if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
 
-                if lidar_data[ray % 181] < step_forward + SAFE_DISTANCE:
-                    needs_correction = True
+                    #print('first_needs_correction',ray, lidar_data[ray % 180])
+                    min_dist = lidar_data[ray % 180] - SAFE_DISTANCE
+                    if not(is_first_index):
 
-                    if first_index == index - correct_position_nb_rays: 
-
+                        is_first_index = True
                         first_index = ray
-
-                    elif first_index != index - correct_position_nb_rays:
-
                         last_index = ray
 
-                    if lidar_data[ray % 181] < min_dist + SAFE_DISTANCE: 
-                        min_dist = lidar_data[ray % 181] - SAFE_DISTANCE 
+                    else:
+                        last_index = ray
 
-            if not(needs_correction): return None
+
+            #print('needs correction?', is_first_index, min_dist)
+            if not(is_first_index): return None
+
+            if first_index == index - correct_position_nb_rays and last_index == index + correct_position_nb_rays + 1: 
+                #print('needs correction? No')
+                return coords
+            
+            #print('it does need correction', index, first_index, last_index)
+            continuity: bool = True
+
+            for ray in range(first_index, last_index):
+
+                if lidar_data[ray % 180] > step_forward + SAFE_DISTANCE:
+                    continuity = False
+
+            if continuity:
+
+                if first_index > index or (last_index > index and abs(first_index - index) <= abs(index - last_index)):
+
+                    interval_correction = first_index - 10, first_index
+
+                else:
+
+                    interval_correction = last_index + 1, last_index + 11
+
+                interval_correction_continuity: bool = True
+            
+                for ray in range(interval_correction[0], interval_correction[1]):
+
+                    if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
+                        #print(ray, lidar_data[ray % 180])
+                        interval_correction_continuity = False
+
+            if not(continuity) or not(interval_correction_continuity): 
+
+                new_pos = np.array((float(coords[0] + min_dist*np.cos(mean_angle)), 
+                                    float(coords[1] + min_dist*np.sin(mean_angle))))
+                #print('new_if', continuity, first_index, last_index, new_pos, mean_angle)
+                return (new_pos, mean_angle)
 
             else:
 
-            # we distinguish three cases depending on the lidar rays around the possible path
-            # either we increase / decrease the angle of the possible path with the drone, or 
-            # we make the possible path closer
-
-                continuous:bool = True
-
-                for ray in range(first_index, last_index+1):
-
-                    if lidar_data[ray % 181] > step_forward + SAFE_DISTANCE:
-
-                        continuous = False
-
-                new_mean_angle = mean_angle
-                new_rays_continuity = True
-
-                if continuous: 
-                    
-                    if abs(first_index - index) < abs(last_index - index):
-
-                        for ray in range(first_index - 10 - 1, first_index):
-
-                            if lidar_data [ray % 181] < step_forward + SAFE_DISTANCE:
-
-                                new_rays_continuity = False
-
-                        if new_rays_continuity: 
-
-                            new_mean_angle = ray_angles[(first_index - 4) % 181]
-
-                    else:
-
-                        for ray in range(last_index + 1, last_index + 10 + 2):
-
-                            if lidar_data [ray % 181] < step_forward + SAFE_DISTANCE:
-
-                                new_rays_continuity = False
-
-                        if new_rays_continuity: 
-
-                            new_mean_angle = ray_angles[(first_index - 4) % 181]
-
-                if not(continuous) or not(new_rays_continuity): 
-                    new_pos = np.array((float(coords[0] + min_dist*np.cos(new_mean_angle)), 
-                                       float(coords[1] + min_dist*np.sin(new_mean_angle))))
-
-                else:
-                    new_pos = np.array((float(coords[0] + step_forward*np.cos(new_mean_angle)),
-                                       float(coords[1] + step_forward*np.sin(new_mean_angle))))
+                #print('aaaaaaaaaaaaaaaaaaaaaaaaaa',
+                #    (interval_correction[0], ray_angles[interval_correction[0]]),
+                #    (interval_correction[1], ray_angles[interval_correction[1]]),
+                #    step_forward)
+                computed_position = compute_position(
+                    (interval_correction[0], ray_angles[interval_correction[0] % 180]),
+                    (interval_correction[1], ray_angles[interval_correction[1] % 180]),
+                    step_forward = step_forward
+                    )
+                
+                new_pos = computed_position[0], computed_position[1]
+                new_mean_angle = computed_position[2]
+                
+                #print('new_else', continuity, interval_correction, interval_correction_continuity, first_index, last_index, new_pos, new_mean_angle)
                 return(new_pos, new_mean_angle)
 
         def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
@@ -203,13 +206,20 @@ class Navigator:
             
             :param Ray1: The first ray of the position
             :type Ray1: Tuple (index, ray_angle[index])
-            :param Ray2 The last ray of the position
+            :param Ray2: The last ray of the position
             :type Ray2: Tuple (index, ray_angle[index])
-            :param step_forward distance between the drone and the new possible path
+            :param step_forward: distance between the drone and the new possible path
             :type step_forward: float
             '''
-            mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1]))+angle)
-            return ((coords[0] + step_forward * np.cos(mean_angle), coords[1] + step_forward * np.sin(mean_angle), mean_angle))    
+            mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1])))
+            #print('mean_angle', mean_angle, Ray1, Ray2)
+            Trueangle = mean_angle + angle
+
+
+            return (float((coords[0] + step_forward * np.cos(Trueangle))), 
+                    float(coords[1] + step_forward * np.sin(Trueangle)), 
+                    mean_angle
+                    )    
 
         def add_to_lidar_possible_angles(position_mean_angle: Tuple) -> None:
             '''
@@ -219,11 +229,13 @@ class Navigator:
             :type position_mean_angle: Tuple
             '''
             visited:bool = False #if the node has been visited or not
-            position:np.array = np.array([position_mean_angle[0], position_mean_angle[1]])
+            position:tuple = (position_mean_angle[0], position_mean_angle[1])
             mean_angle:float = position_mean_angle[2]
             visited = is_visited(position)
+
             if visited: return # we stop if path is already visited
 
+            #print('sending candidate to correct', position, mean_angle)
             # correction refers to setting the node closer to the drone in case it is hidden by a wall for some reason
             needs_correction = correct_position(mean_angle) 
             #print('position, needs correction',position, needs_correction)
@@ -239,7 +251,7 @@ class Navigator:
             # Sort the angles in decreasing absolute value of angle order
             if len(lidar_possible_angles)>0:
                 rank = 0
-                while rank < len(lidar_possible_angles) and abs(circmean(lidar_possible_angles[rank][1] - angle, math.pi, -math.pi)) < abs(circmean(mean_angle - angle, math.pi, -math.pi)):
+                while rank < len(lidar_possible_angles) and abs(lidar_possible_angles[rank][1]) < abs(mean_angle):
                     rank+=1
 
                 if rank != len(lidar_possible_angles):
@@ -251,7 +263,19 @@ class Navigator:
 
                 lidar_possible_angles.append((position, mean_angle))
 
+            #print('computed', (position,mean_angle))
             return
+
+        #In case there is nothing directly in front of the drone
+        boolean = True
+        for index in range(85,96):
+            if lidar_data[index] < minimal_distance: 
+                boolean = False
+        if boolean:
+            Ray1 = 85, ray_angles[85]
+            Ray2 = 95, ray_angles[95]
+            computed = compute_position(Ray1, Ray2, step_forward)
+            add_to_lidar_possible_angles(computed)
 
         for index in range(round(angle_ignore/2), 181 - round(angle_ignore/2) -1):
 
@@ -270,11 +294,10 @@ class Navigator:
                     #print('call1')
                     #print('min_ray,max_ray', min_ray,max_ray)
                     computed = compute_position(min_ray,max_ray,step_forward)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
             
             if lidar_data[index+1]*edge_length > lidar_data[index]: #imagine a little room with a door flush in a wall. Might not be deep but we can use the fact that there will be two consecutive rays with a big gap
-                edge_begin = index+1 , ray_angles [index+1]
+                edge_begin = index+1, ray_angles[index+1]
                 #print('edge_begin', edge_begin)
 
             elif lidar_data[index+1] < lidar_data[index] * edge_length:
@@ -283,10 +306,9 @@ class Navigator:
                 #print('edge_end',edge_end)
                 if edge_begin != None: 
 
-                    #print('call2, edge_begin and edge_end')
+                    #print('call2, edge_begin and edge_end', edge_begin, edge_end)
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
 
                     edge_begin = None
@@ -294,13 +316,12 @@ class Navigator:
 
             if edge_begin != None:
 
-                if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end, we make sure that the rays are still hitting something
+                if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end
 
-                    edge_end = (edge_begin[0] + extra_rays) % 181, ray_angles[(edge_begin[0]+extra_rays) % 181]
+                    edge_end = edge_begin[0] + extra_rays, ray_angles[edge_begin[0]+extra_rays]
                     #print('call2, edge_begin')
                     computed = compute_position(edge_begin,edge_end,step_forward)
                     #print('computed',computed)
-                    lidar_possible_paths.append(computed)
                     add_to_lidar_possible_angles(computed)
 
                     edge_begin = None
@@ -311,7 +332,6 @@ class Navigator:
             
                 #print('call2, edge_end')
                 computed = compute_position(edge_begin,edge_end,step_forward)
-                lidar_possible_paths.append(computed)
                 add_to_lidar_possible_angles(computed)
 
                 edge_begin = None
@@ -341,7 +361,6 @@ class Navigator:
             #print('end_of_loop', end_of_loop)
             #print('call3 param', begin_loop, (index, ray_angles[index%180]))
             computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
 
             if not(end_of_loop_bool):
@@ -355,7 +374,6 @@ class Navigator:
                 #print('call4')
                 #print('call4 params',(index % 180, ray_angles[index % 180]), end_of_loop )
                 computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-                lidar_possible_paths.append(computed)
                 add_to_lidar_possible_angles(computed)
 
         elif begin_loop != False and end_of_loop == False:
@@ -369,7 +387,6 @@ class Navigator:
             #print('call5')
             #print(begin_loop, (index, ray_angles[index % 180]))
             computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
 
         elif begin_loop == False and end_of_loop != False:
@@ -383,12 +400,11 @@ class Navigator:
             index+=1
             #print('call6')
             computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-            lidar_possible_paths.append(computed)
             add_to_lidar_possible_angles(computed)
         
         lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
-        print('list',lidar_possible_angles)
-
+        #print('list',lidar_possible_angles)
+        #print(lidar_possible_angles)
         lidar_possible_angles.reverse()
         return lidar_possible_angles
 
