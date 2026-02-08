@@ -80,7 +80,7 @@ class Navigator:
         extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
         correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped centered around the possible path that are checked for minimum length 
 
-        print('position', coords, angle)
+        #print('position', coords, angle)
         def is_visited(position: Tuple) -> bool:
             '''
             function that returns True if the position is worth adding to list_possible_paths, False otherwise
