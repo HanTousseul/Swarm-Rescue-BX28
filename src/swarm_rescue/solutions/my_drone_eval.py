@@ -1,5 +1,4 @@
-#from swarm_rescue.solutions.my_drone_driver import MyStatefulDrone
-from swarm_rescue.solutions.my_drone_driver_corrected import MyStatefulDrone
+from swarm_rescue.solutions.my_drone_driver import MyStatefulDrone
 
 
 
