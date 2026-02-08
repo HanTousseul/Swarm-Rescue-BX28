@@ -55,13 +55,12 @@ class MapFinal2022_23(MapAbstract):
              (316, 585), (852, 621), (-552, 453), (640, 215), (-860, 265),
              (-538, 265), (-450, -55), (850, -41), (-550, -365), (-370, -365),
              (840, -385), (840, -625), (320, -495), (-110, -615), (-202, -615),
-             (-850, -615)
-            ]
+             (-850, -615), ]
         self._number_wounded_persons = len(self._wounded_persons_pos)
         self._wounded_persons: List[WoundedPerson] = []
 
         # POSITIONS OF THE DRONES
-        self._number_drones = 1
+        self._number_drones = 10
         # They are positioned in a square whose side size depends on the total number of drones.
         start_area_drones = (0, 217)
         nb_per_side = math.ceil(math.sqrt(float(self._number_drones)))
@@ -78,8 +77,6 @@ class MapFinal2022_23(MapAbstract):
             y = sy + math.floor(float(i) / nb_per_side) * dist_inter_drone
             angle = random.uniform(-math.pi, math.pi)
             self._drones_pos.append(((x, y), angle))
-
-        self._drones_pos = [((-700,-450), math.pi/2)]
 
         self._drones: List[DroneAbstract] = []
 
