@@ -448,7 +448,6 @@ class Navigator:
     def is_path_blocked(self, target_pos, safety_margin=20):
         """
         Check if the straight line from current position to target_pos is blocked.
-        [UPDATE]: Tự động tăng safety_margin nếu đang cầm người để tránh va chạm "đuôi".
         """
         if target_pos is None: return False
 

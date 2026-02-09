@@ -62,23 +62,31 @@ class Pilot:
     
     def move_to_target_PID(self) -> CommandsDict:
         """
-        Hàm điều khiển GỐC của bạn + Cộng thêm Lateral từ trường.
+        Your ORIGINAL control function + additional lateral force field.
         """
+
+        # If there is no target, stop completely
         if self.drone.current_target is None:
             return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
 
+        # Compute vector to target
         delta_x = self.drone.current_target[0] - self.drone.estimated_pos[0]
         delta_y = self.drone.current_target[1] - self.drone.estimated_pos[1]
         dist_to_target = math.hypot(delta_x, delta_y)
 
-        # 1. Xoay về hướng mục tiêu
+        # --------------------------------------------------
+        # 1. Rotate toward the target (PID rotation control)
+        # --------------------------------------------------
         target_angle = math.atan2(delta_y, delta_x)
         angle_error = normalize_angle(target_angle - self.drone.estimated_angle)
         
         rotation_cmd = KP_ROTATION * angle_error
         rotation_cmd = max(-1.0, min(1.0, rotation_cmd))
 
-        # 2. Tiến tới (LOGIC CŨ: CHẬM & CHẮC)
+        # --------------------------------------------------
+        # 2. Forward movement (OLD LOGIC: slow & stable)
+        #    Gradual braking when approaching target
+        # --------------------------------------------------
         MAX_SPEED = 0.6
         BRAKING_DIST = 150.0
         STOP_DIST = 15.0 
@@ -91,49 +99,71 @@ class Pilot:
         else:
             forward_cmd = 0.05
 
-        # 3. Kỷ luật Xoay
+        # --------------------------------------------------
+        # 3. Rotation discipline
+        #    Do NOT move forward if angle is too large
+        #    (prevents sliding while turning)
+        # --------------------------------------------------
         if abs(angle_error) > 0.2:
             forward_cmd = 0.0 
 
         forward_cmd = max(-1.0, min(1.0, forward_cmd))
 
-        # --- LOGIC ĐẶC BIỆT CHO RETURNING (Cõng người) ---
+        # --------------------------------------------------
+        # Special logic when RETURNING (carrying a victim)
+        # Faster movement to reduce rescue time
+        # --------------------------------------------------
         if self.drone.grasped_wounded_persons():
             forward_cmd = 0.8
-            if dist_to_target <= 60.0: forward_cmd = 0.45
+            if dist_to_target <= 60.0:
+                forward_cmd = 0.45
 
-        # Khởi tạo cmd_lateral mặc định
+        # Initialize default lateral command
         cmd_lateral = 0.0
 
-        # --- 4. XỬ LÝ TRÁNH VA CHẠM DRONE (DEADLOCK RESOLUTION CŨ) ---
-        # Giữ lại cái này như một lớp bảo vệ cứng (Hard Safety)
+        # --------------------------------------------------
+        # 4. Drone collision avoidance (OLD deadlock resolution)
+        # Hard safety layer to prevent drone-to-drone blocking
+        # --------------------------------------------------
         if forward_cmd > 0.05 and self.is_blocked_by_drone(safety_dist=60.0):
             forward_cmd = 0.0 
             cmd_lateral = -0.6 
 
-        # --- [TÍCH HỢP MỚI] 5. CỘNG HƯỞNG LỰC ĐẨY LATERAL ---
-        # Chỉ cộng thêm lực trượt ngang, không ảnh hưởng forward
+        # --------------------------------------------------
+        # 5. [NEW INTEGRATION] Add lateral repulsive force
+        # Only affects sideways motion, not forward speed
+        # --------------------------------------------------
         _, rep_lat = self.calculate_repulsive_force()
         
-        # Cộng dồn vào lateral hiện tại
+        # Accumulate lateral forces
         cmd_lateral += rep_lat
         
-        # Clip lateral để không quá giới hạn
+        # Clamp lateral command
         cmd_lateral = max(-1.0, min(1.0, cmd_lateral))
 
-        # --- LOGIC GRASPER THÔNG MINH ---
+        # --------------------------------------------------
+        # Smart grasper logic
+        # Automatically grab/release depending on state
+        # --------------------------------------------------
         grasper_val = 0
         if self.drone.state in ["RETURNING", "DROPPING"]:
             grasper_val = 1
         elif self.drone.state == "RESCUING":
-            if dist_to_target <= 17.0: grasper_val = 1
-            else: grasper_val = 0
+            if dist_to_target <= 50.0:
+                grasper_val = 1
+            else:
+                grasper_val = 0
         elif self.drone.state == "END_GAME" and self.drone.grasped_wounded_persons():
              grasper_val = 1
 
-        if self.drone.not_grapsed: grasper_val = 0
+        if self.drone.not_grapsed:
+            grasper_val = 0
 
-        # --- ANTI-STUCK MECHANISM (Rescue Center Wall) ---
+        # --------------------------------------------------
+        # Anti-stuck mechanism (near Rescue Center walls)
+        # Uses front LiDAR rays to detect close obstacles
+        # If blocked, slide sideways to escape
+        # --------------------------------------------------
         if self.drone.state in ["RETURNING", "END_GAME"] and dist_to_target < 100.0 and dist_to_target > 30.0:
             lidar_vals = self.drone.lidar_values()
             if lidar_vals is not None:
@@ -144,9 +174,12 @@ class Pilot:
                         forward_cmd = 0.0
                         slide_force = 0.6 
                         
-                        if abs(angle_error) < 0.1: cmd_lateral = -slide_force 
-                        elif angle_error > 0: cmd_lateral = slide_force 
-                        else: cmd_lateral = -slide_force 
+                        if abs(angle_error) < 0.1:
+                            cmd_lateral = -slide_force 
+                        elif angle_error > 0:
+                            cmd_lateral = slide_force 
+                        else:
+                            cmd_lateral = -slide_force 
 
                         return {
                             "forward": forward_cmd,
@@ -155,6 +188,7 @@ class Pilot:
                             "grasper": grasper_val
                         }
 
+        # Final command output
         return {
             "forward": forward_cmd, 
             "lateral": cmd_lateral, 
