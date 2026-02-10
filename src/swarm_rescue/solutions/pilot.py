@@ -87,7 +87,7 @@ class Pilot:
         # 2. Forward movement (OLD LOGIC: slow & stable)
         #    Gradual braking when approaching target
         # --------------------------------------------------
-        MAX_SPEED = 0.6
+        MAX_SPEED = 0.5
         BRAKING_DIST = 150.0
         STOP_DIST = 15.0 
 
@@ -114,7 +114,7 @@ class Pilot:
         # Faster movement to reduce rescue time
         # --------------------------------------------------
         if self.drone.grasped_wounded_persons():
-            forward_cmd = 0.8
+            forward_cmd = 0.7
             if dist_to_target <= 60.0:
                 forward_cmd = 0.45
 
@@ -149,7 +149,7 @@ class Pilot:
         if self.drone.state in ["RETURNING", "DROPPING"]:
             grasper_val = 1
         elif self.drone.state == "RESCUING":
-            if dist_to_target <= 50.0:
+            if dist_to_target <= 15.0:
                 grasper_val = 1
             else:
                 grasper_val = 0
