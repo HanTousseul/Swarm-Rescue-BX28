@@ -28,17 +28,24 @@ class Pilot:
         """
         Only calculate the force to get the Lateral (dodge) component.
         """
+        wall_avoidance_distance = 120
         total_lat = 0.0
         #We no longer need the total_fwd, but we still include it to ensure the vortex logic works correctly.
         
+        lidar_data = self.drone.lidar_values()
+        ray_angles = self.drone.lidar_ray_angles()
+
         semantic_data = self.drone.semantic_values()
         if not semantic_data: return 0.0, 0.0
 
         drone_count_nearby = 0 
+
+        priority_bool = self.drone.comms.get_priority()
+
         for data in semantic_data:
             if data.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
                 dist = data.distance
-                if 0.1 < dist < 120.0:
+                if 0.1 < dist < wall_avoidance_distance:
                     drone_count_nearby += 1
                     
                     # Force coefficient K. 
@@ -57,6 +64,42 @@ class Pilot:
                     
                     # total_fwd += ... (ignore, do not use)
                     total_lat += force_magnitude * math.sin(push_angle)
+
+        list_consec_index = []
+        for index in range(180):
+            if lidar_data[index] < wall_avoidance_distance:
+
+                if index == 0: list_consec_index.append([0,0])
+
+                elif len(list_consec_index) == 0:
+                    
+                    list_consec_index.append([index, index])
+
+                elif list_consec_index[-1][1] == index -1:
+
+                    list_consec_index[-1][1] = index
+
+                else:
+
+                    list_consec_index.append([index, index])
+                
+                # Force coefficient K. 
+                # Since there is no longer forward braking force, we need a sufficiently strong lateral force to dodge in time.                    
+                K = 400.0 
+                if self.drone.not_grapsed: K = 0
+                
+                force_magnitude = K / (dist ** 2)
+                force_magnitude = min(1.2, force_magnitude)
+
+                # VORTEX Logic (Xoáy)
+                VORTEX_ANGLE = 0.4 
+                if drone_count_nearby > 2: VORTEX_ANGLE = 0.8 
+
+                push_angle = data.angle + math.pi - VORTEX_ANGLE
+                
+                # total_fwd += ... (ignore, do not use)
+                total_lat += force_magnitude * math.sin(push_angle)
+
         
         return 0.0, total_lat # Returns only lateral
     
