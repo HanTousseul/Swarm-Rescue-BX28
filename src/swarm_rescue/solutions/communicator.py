@@ -6,9 +6,6 @@ class CommunicatorHandler:
     def __init__(self, drone):
         self.drone = drone
 
-    # The function should_wait_in_queue() was removed
-    # to completely eliminate the old queue-based waiting mechanism
-
     def is_target_taken_or_better_candidate(self, target_person_pos):
         # If there is no target, nothing to coordinate
         if target_person_pos is None:
@@ -83,3 +80,48 @@ class CommunicatorHandler:
 
         # No better candidate found -> we can continue targeting
         return False
+    
+    def avoidance_priority(self):
+
+        '''
+        In case of two or more drones coming close to each other, we use calculate_repulsive_force in pilot.py to avoid collision, 
+        this function returns a value called priority that will give a hierarchy to the drones to follow. The highest one in that hierarchy
+        will not change its trajectory and the others will adapt. This ensures that conflicts are resolved. if one drone is rescuing a person
+        it immediately gets priority, otherwise, the one with the highest identifier gets priority
+        
+        :return: Value giving rank in hierarchy of the drone, to be communicated
+        :rtype: int
+        '''
+        
+        priority = 0
+
+        if self.drone.state == 'RESCUING' or self.drone.state == 'RETURNING':
+        
+            priority = 10 + self.drone.identifier
+
+        else:
+
+            priority = self.drone.identifier
+
+        return priority
+
+    def get_priority(self):
+
+        '''
+        function that returns whether or not we have priority, and thus whether or not we should correct our trajectory or not
+        
+        :return: Whether or not we have prioriry
+        :rtype: bool
+        '''
+
+        if self.drone.communicator_is_disabled():
+            return None
+        
+        priority_bool = True
+        for msg_package in self.drone.communicator.received_messages:
+
+            if msg_package['priority'] > self.drone.priority:
+
+                priority_bool = False
+
+        return priority_bool

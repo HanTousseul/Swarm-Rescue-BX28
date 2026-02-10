@@ -84,7 +84,7 @@ class MyStatefulDrone(DroneAbstract):
                         closest_person_dist = data.distance
                         closest_person_pos = np.array([obj_x, obj_y])
                 
-                if data.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER:
+                elif data.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER:
                     check_center = True
                     if self.rescue_center_pos is None:
                        self.rescue_center_pos = np.array([obj_x, obj_y])
@@ -232,7 +232,7 @@ class MyStatefulDrone(DroneAbstract):
                     if self.current_target is None: self.nav.path_history[target_int_key] = self.estimated_pos.copy()
                     else: self.nav.path_history[target_int_key] = self.current_target.copy()
                     self.current_target = np.array(next_target)
-                    print(f"Explore location {self.current_target}")
+                    #print(f"Explore location {self.current_target}")
                 else:
                     if self.current_target is not None:
                         current_int_key = (int(self.current_target[0]), int(self.current_target[1]))
