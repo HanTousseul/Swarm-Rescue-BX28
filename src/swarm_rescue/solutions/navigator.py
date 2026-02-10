@@ -65,7 +65,7 @@ class Navigator:
         edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
         Same_possible_path = 50 #Maximum distance between two possible paths for them to be considered as the same 
         already_visited_path = 75 #Distance above which a new possible path will be considered valid if its distance with an already visited path is greather than already visited path
-        rescuing_bool:bool = self.drone.state == 'RESCUING'
+        rescuing_bool:bool = (self.drone.state == 'RESCUING' or self.drone.state == 'RETURNING')
 
         coords = self.drone.estimated_pos
         angle = self.drone.estimated_angle
