@@ -41,6 +41,7 @@ class MyStatefulDrone(DroneAbstract):
         self.patience = None
         self.not_grapsed = False
         self.drop_step = 0
+        self.priority = self.comms.avoidance_priority()
 
         self.estimated_pos = np.array([0.0, 0.0]) 
         self.estimated_angle = 0.0
@@ -63,7 +64,7 @@ class MyStatefulDrone(DroneAbstract):
         
         # 1. Update Navigator & Sensors
         self.nav.update_navigator()
-        REACH_THRESHOLD_LOCAL = 24.0 if self.grasped_wounded_persons() else 35.0
+        REACH_THRESHOLD_LOCAL = 30 if self.grasped_wounded_persons() else 45
         
         if self.cnt_timestep == 1:
             self.initial_position = self.estimated_pos.copy()
@@ -135,57 +136,62 @@ class MyStatefulDrone(DroneAbstract):
         # 5. [NEW] HARD STUCK DETECTION & UNSTICK
         # =========================================================================
         
-        # Update history of current position (Sliding Window 60 steps)
-        self.pos_history_long.append(self.estimated_pos.copy())
-        if len(self.pos_history_long) > 60:
-            self.pos_history_long.pop(0) 
-        
-        # Check stuck (when the list has 60 elements)
-        if len(self.pos_history_long) == 60 and (steps_remaining > RETURN_TRIGGER_STEPS or (steps_remaining <= RETURN_TRIGGER_STEPS and not self.is_inside_return_area)):
-            # Compare current position with 60 steps before position
-            start_pos = self.pos_history_long[0]
-            dist_moved = np.linalg.norm(self.estimated_pos - start_pos)
+        ## Update history of current position (Sliding Window 60 steps)
+        #self.pos_history_long.append(self.estimated_pos.copy())
+        #if len(self.pos_history_long) > 60:
+        #    self.pos_history_long.pop(0) 
+        #
+        ## Check stuck (when the list has 60 elements)
+        #if len(self.pos_history_long) == 60 and (steps_remaining > RETURN_TRIGGER_STEPS or (steps_remaining <= RETURN_TRIGGER_STEPS and not self.is_inside_return_area)):
+        #    # Compare current position with 60 steps before position
+        #    start_pos = self.pos_history_long[0]
+        #    dist_moved = np.linalg.norm(self.estimated_pos - start_pos)
+        #    
+        #    # If move only < 17px in 60 steps -> Stuck
+        #    if dist_moved < 17.0:
+        #        # 3. Action to unstuck
+        #        
+        #        lat_force = 0.0
+        #        
+        #        # Check target direction to slide (if right -> slide right, if left -> slide left)
+        #        if self.current_target is not None:
+        #            d_x = self.current_target[0] - self.estimated_pos[0]
+        #            d_y = self.current_target[1] - self.estimated_pos[1]
+        #            target_angle = math.atan2(d_y, d_x)
+        #            
+        #            # Calculate dif angle to the front of the drone
+        #            angle_diff = target_angle - self.estimated_angle
+        #            
+        #            # Normalize to range [-pi, pi]
+        #            while angle_diff > math.pi: angle_diff -= 2 * math.pi
+        #            while angle_diff <= -math.pi: angle_diff += 2 * math.pi
+        #            
+        #            # If target on the left (> 0) -> Slide left (1.0)
+        #            # If target on the right (< 0) -> Slide right (-1.0)
+        #            lat_force = 1.0 if angle_diff > 0 else -1.0
+        #        else:
+        #            # Fallback if there was no target (random)
+        #            lat_force = 1.0 if random.random() > 0.5 else -1.0
+#
+        #        # Go back to unstuck with lateral movement for better aim to target
+        #        fwd_force = -0.7
+        #        
+        #        # Keep the grasping state
+        #        grasper_val = 1 if self.grasped_wounded_persons() else 0
+        #        
+        #        # Return movement command
+        #        return {
+        #            "forward": fwd_force, 
+        #            "lateral": lat_force,
+        #            "rotation": 0.0,      # No rotation for constant direction of drone
+        #            "grasper": grasper_val
+        #        }
             
-            # If move only < 17px in 60 steps -> Stuck
-            if dist_moved < 17.0:
-                # 3. Action to unstuck
-                
-                lat_force = 0.0
-                
-                # Check target direction to slide (if right -> slide right, if left -> slide left)
-                if self.current_target is not None:
-                    d_x = self.current_target[0] - self.estimated_pos[0]
-                    d_y = self.current_target[1] - self.estimated_pos[1]
-                    target_angle = math.atan2(d_y, d_x)
-                    
-                    # Calculate dif angle to the front of the drone
-                    angle_diff = target_angle - self.estimated_angle
-                    
-                    # Normalize to range [-pi, pi]
-                    while angle_diff > math.pi: angle_diff -= 2 * math.pi
-                    while angle_diff <= -math.pi: angle_diff += 2 * math.pi
-                    
-                    # If target on the left (> 0) -> Slide left (1.0)
-                    # If target on the right (< 0) -> Slide right (-1.0)
-                    lat_force = 1.0 if angle_diff > 0 else -1.0
-                else:
-                    # Fallback if there was no target (random)
-                    lat_force = 1.0 if random.random() > 0.5 else -1.0
-
-                # Go back to unstuck with lateral movement for better aim to target
-                fwd_force = -0.7
-                
-                # Keep the grasping state
-                grasper_val = 1 if self.grasped_wounded_persons() else 0
-                
-                # Return movement command
-                return {
-                    "forward": fwd_force, 
-                    "lateral": lat_force,
-                    "rotation": 0.0,      # No rotation for constant direction of drone
-                    "grasper": grasper_val
-                }
         # =========================================================================
+        # 5. [NEW][NEW] HARD STUCK DETECTION & UNSTICK (V2)
+        # =========================================================================
+
+        #self.nav.unstuck()
 
         # ================= STATE MACHINE =================
 
@@ -415,6 +421,7 @@ class MyStatefulDrone(DroneAbstract):
             "id": self.identifier,
             "state": self.state,
             "person_pos": person_target, 
-            "current_pos": self.estimated_pos
+            "current_pos": self.estimated_pos,
+            "priority": self.priority
         }
         return msg_data

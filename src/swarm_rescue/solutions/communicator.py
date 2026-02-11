@@ -119,8 +119,8 @@ class CommunicatorHandler:
         
         priority_bool = True
         for msg_package in self.drone.communicator.received_messages:
-
-            if msg_package['priority'] > self.drone.priority:
+            content = msg_package[1] if isinstance(msg_package, tuple) else msg_package
+            if content['priority'] > self.drone.priority:
 
                 priority_bool = False
 

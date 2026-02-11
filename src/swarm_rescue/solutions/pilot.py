@@ -24,13 +24,36 @@ class Pilot:
                     return True
         return False
 
-    def repulsive_force(self):
+    def repulsive_force(self) -> tuple:
 
+        
         repulsion_coeff = 20
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
+        nb_rays_wounded_pers = 10
+
         lidar_data = self.drone.lidar_values()
         ray_angles = self.drone.lidar_rays_angles()
+        semantic_data = self.drone.semantic_values()
+
+        priority:bool = self.drone.comms.get_priority()
+
+        for elt in semantic_data: 
+
+            if elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON or DroneSemanticSensor.TypeEntity.RESCUE_CENTER and self.drone.state == 'RETURNING':
+
+                angle_deg = round(np.rad2deg(normalize_angle(elt.angle, True)))
+                index = angle_deg // 2
+
+                for i in range(index - nb_rays_wounded_pers, index +nb_rays_wounded_pers  + 1):
+
+                    lidar_data[i % 180] = 300
+
+                force = 10 * repulsion_coeff / elt.distance ** 2 
+
+                unit_vector_angle = elt.angle
+
+                total_rad_repulsion += force *np.cos(unit_vector_angle)
 
         for elt in range (180):
 
@@ -45,8 +68,9 @@ class Pilot:
         #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
 
-        return (total_rad_repulsion, total_orthor_repulsion)
+        if priority: total_orthor_repulsion = 0
 
+        return (total_rad_repulsion, total_orthor_repulsion)
 
 
     def move_to_target_PID(self) -> CommandsDict:
@@ -77,6 +101,7 @@ class Pilot:
         #    Gradual braking when approaching target
         # --------------------------------------------------
         MAX_SPEED = 0.6
+        MAX_SPEED_RESCUE = 1
         BRAKING_DIST = 150.0
         STOP_DIST = 15.0 
 
@@ -103,7 +128,7 @@ class Pilot:
         # Faster movement to reduce rescue time
         # --------------------------------------------------
         if self.drone.grasped_wounded_persons():
-            forward_cmd = 0.8
+            forward_cmd = MAX_SPEED_RESCUE
             if dist_to_target <= 60.0:
                 forward_cmd = 0.45
 
@@ -270,23 +295,7 @@ class Pilot:
 #                    # total_fwd += ... (ignore, do not use)
 #                    total_lat += force_magnitude * math.sin(push_angle)
 #
-#        list_consec_index = []
-#        for index in range(180):
-#            if lidar_data[index] < wall_avoidance_distance:
-#
-#                if index == 0: list_consec_index.append([0,0])
-#
-#                elif len(list_consec_index) == 0:
-#                    
-#                    list_consec_index.append([index, index])
-#
-#                elif list_consec_index[-1][1] == index -1:
-#
-#                    list_consec_index[-1][1] = index
-#
-#                else:
-#
-#                    list_consec_index.append([index, index])
+#     
 #                
 #                # Force coefficient K. 
 #                # Since there is no longer forward braking force, we need a sufficiently strong lateral force to dodge in time.                    
