@@ -97,7 +97,7 @@ class CommunicatorHandler:
 
         if self.drone.state == 'RESCUING' or self.drone.state == 'RETURNING':
         
-            priority = 10 + self.drone.identifier
+            priority = 100 + self.drone.identifier
 
         else:
 

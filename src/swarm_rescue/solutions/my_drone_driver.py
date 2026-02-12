@@ -34,6 +34,8 @@ class MyStatefulDrone(DroneAbstract):
         self.position_before_rescue = None
         self.initial_position = None
         self.cnt_timestep = 0
+        self.same_position_timestep = 0
+        self.previous_position = None
         
         self.last_rescue_pos = None
         self.initial_spot_pos = None
@@ -64,7 +66,7 @@ class MyStatefulDrone(DroneAbstract):
         
         # 1. Update Navigator & Sensors
         self.nav.update_navigator()
-        REACH_THRESHOLD_LOCAL = 30 if self.grasped_wounded_persons() else 45
+        REACH_THRESHOLD_LOCAL = 25 if self.grasped_wounded_persons() else 40
         
         if self.cnt_timestep == 1:
             self.initial_position = self.estimated_pos.copy()
@@ -191,7 +193,25 @@ class MyStatefulDrone(DroneAbstract):
         # 5. [NEW][NEW] HARD STUCK DETECTION & UNSTICK (V2)
         # =========================================================================
 
-        #self.nav.unstuck()
+
+         
+
+        if self.current_target is not None:
+
+            print(self.identifier, self.estimated_pos, self.current_target)
+
+            if self.previous_position is None:
+                
+                self.previous_position = self.current_target
+
+                if np.hypot(self.previous_position[0] - self.current_target[0],self.previous_position[1] - self.current_target[1]) < 25:
+
+                    self.same_position_timestep += 1
+
+                else:
+
+                    self.previous_position = self.current_target
+                    self.same_position_timestep = 0
 
         # ================= STATE MACHINE =================
 
@@ -226,9 +246,6 @@ class MyStatefulDrone(DroneAbstract):
                         if self.rescue_center_pos is not None:
                             dist_to_rc = np.linalg.norm(np.array(candidate) - self.rescue_center_pos)
                             if dist_to_rc < 150.0: is_safe = False
-                            if self.nav.is_path_blocked(candidate, 5): 
-                                is_safe = False
-                                print("This path is blocked by wall, choose another")
                         
                         if is_safe:
                             next_target = candidate

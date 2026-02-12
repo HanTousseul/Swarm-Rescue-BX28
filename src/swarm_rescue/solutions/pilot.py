@@ -12,6 +12,7 @@ KP_FORWARD = 0.5
 
 class Pilot:
     def __init__(self, drone):
+
         self.drone = drone
 
     def is_blocked_by_drone(self, safety_dist=60.0, safety_angle=0.2):
@@ -23,24 +24,64 @@ class Pilot:
                 if data.distance < safety_dist and abs(data.angle) < safety_angle:
                     return True
         return False
+    
+    def repulsive_force(self):
 
+            repulsion_coeff = 20
+            total_rad_repulsion = 0
+            total_orthor_repulsion = 0
+
+            lidar_data = self.drone.lidar_values()
+            ray_angles = self.drone.lidar_rays_angles()
+
+            for elt in range (180):
+
+                if lidar_data[elt] < 220:
+
+                    force = repulsion_coeff / lidar_data[elt] ** 2 
+                    unit_vector_angle = ray_angles[elt] + math.pi
+
+                    total_rad_repulsion += force * np.cos(unit_vector_angle)
+                    total_orthor_repulsion += force *np.sin(unit_vector_angle)
+
+            #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
+            #total_rad_repulsion = min(0.7, total_rad_repulsion)
+
+            return (total_rad_repulsion, total_orthor_repulsion)
+    
     def repulsive_force(self) -> tuple:
-
         
-        repulsion_coeff = 30
+        repulsion_coeff = 45
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
-        nb_rays_wounded_pers = 10
+        nb_rays_wounded_pers = 90
+        nb_rays_drone = nb_rays_wounded_pers // 6
+        nb_rays_rescue_center = nb_rays_drone
 
         lidar_data = self.drone.lidar_values()
         ray_angles = self.drone.lidar_rays_angles()
         semantic_data = self.drone.semantic_values()
+        semantic_data_bool = False
 
         priority:bool = self.drone.comms.get_priority()
 
         for elt in semantic_data: 
 
-            if elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON or DroneSemanticSensor.TypeEntity.RESCUE_CENTER and self.drone.state == 'RETURNING':
+            if elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
+
+                if elt.distance == 0: force = nb_rays_wounded_pers * repulsion_coeff / 0.5 ** 2 
+
+                else: force = nb_rays_wounded_pers * repulsion_coeff / elt.distance ** 2 
+
+            elif DroneSemanticSensor.TypeEntity.RESCUE_CENTER and self.drone.state == 'RETURNING':
+
+                if elt.distance == 0: force = nb_rays_rescue_center * repulsion_coeff / 0.5 ** 2 
+
+                else: force = nb_rays_rescue_center * repulsion_coeff / elt.distance ** 2 
+
+            else: force = 0
+
+            if force != 0:
 
                 angle_deg = round(np.rad2deg(normalize_angle(elt.angle, True)))
                 index = angle_deg // 2
@@ -49,21 +90,15 @@ class Pilot:
 
                     lidar_data[i % 180] = 300
 
-                if elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
-
-                    force = 3 * nb_rays_wounded_pers * repulsion_coeff / elt.distance ** 2 
-
-                else:
-
-                    force = 2 * nb_rays_wounded_pers * repulsion_coeff / elt.distance ** 2 
-
                 unit_vector_angle = elt.angle
 
                 total_rad_repulsion += force *np.cos(unit_vector_angle)
 
+        total_rad_repulsion, total_orthor_repulsion = 0,0
+
         for elt in range (180):
 
-            if lidar_data[elt] < 220:
+            if lidar_data[elt] < 220 and lidar_data[elt] != 0:
 
                 force = repulsion_coeff / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
@@ -74,16 +109,27 @@ class Pilot:
         #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
 
-        if priority: total_orthor_repulsion = 0
+        #if priority: total_rad_repulsion,total_orthor_repulsion = 0,0
 
         #total_rad_repulsion = 0.7 * total_rad_repulsion
+
+        #unstuck = self.unstuck()
+        
+        unstuck = None
+#
+        if unstuck is not None:
+#
+            unstuck_rad_force, unstuck_orthor_force = unstuck
+#
+            total_rad_repulsion += unstuck_rad_force
+            total_orthor_repulsion += unstuck_orthor_force
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
 
     def move_to_target_PID(self) -> CommandsDict:
         """
-        Your ORIGINAL control function + additional lateral force field.
+        Your ORIGINAL control function.
         """
 
         # If there is no target, stop completely
@@ -262,65 +308,77 @@ class Pilot:
         }
 
 
-#    def calculate_repulsive_force(self):
-#        """
-#        Only calculate the force to get the Lateral (dodge) component.
-#        """
-#        wall_avoidance_distance = 120
-#        total_lat = 0.0
-#        #We no longer need the total_fwd, but we still include it to ensure the vortex logic works correctly.
-#        
-#        lidar_data = self.drone.lidar_values()
-#        ray_angles = self.drone.lidar_ray_angles()
+    def unstuck(self) -> None:
+
+        if self.drone.same_position_timestep < 10: return (0,0)
+
+        lidar_data = self.drone.lidar_values()
+        ray_angles = self.drone.lidar_rays_angles()
+
+        unstuck_velocity = 0.5
+        unstuck_angle = np.deg2rad(15) # angle between wall and direction the drone is going in to unstuck
+        nb_rays_around = 5
+
+        current_pos = self.drone.estimated_pos
+        current_target = self.drone.current_target  
+
+        if self.drone.current_target is None: return (0,0)
+
+        relative_angle = np.atan2(current_target[1], current_target[0])
+        relative_dist = np.linalg.norm((current_pos[0] - current_target[0], current_pos[1] - current_target[1]))
+
+        #print(relative_angle, relative_dist)
+
+        corresponding_index = round(np.rad2deg(relative_angle + math.pi)) // 2
+        stuck = False
+        l_stuck = []
+
+        for index in range(corresponding_index - nb_rays_around ,corresponding_index + nb_rays_around + 1):
+
+            if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
+
+                stuck = True
+                l_stuck.append(index)
+
+        if stuck: 
+            list_possible_paths = self.drone.nav.lidar_possible_paths()
+            if list_possible_paths:
+                self.drone.current_target = list(list_possible_paths[-1][0])
+            return (0.8,0.8)
+
+            #good_left = True
+            #for index in range(l_stuck[0] - 2 * nb_rays_around - 1, l_stuck[0]):
 #
-#        semantic_data = self.drone.semantic_values()
-#        if not semantic_data: return 0.0, 0.0
+            #    if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
 #
-#        drone_count_nearby = 0 
+            #        good_left = False
 #
-#        priority_bool = self.drone.comms.get_priority()
+            #if good_left: 
 #
-#        for data in semantic_data:
-#            if data.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
-#                dist = data.distance
-#                if 0.1 < dist < wall_avoidance_distance:
-#                    drone_count_nearby += 1
-#                    
-#                    # Force coefficient K. 
-#                    # Since there is no longer forward braking force, we need a sufficiently strong lateral force to dodge in time.                    
-#                    K = 400.0 
-#                    if self.drone.not_grapsed: K = 0
-#                    
-#                    force_magnitude = K / (dist ** 2)
-#                    force_magnitude = min(1.2, force_magnitude)
+            #    unstuck_rad_force = - unstuck_velocity * np.sin(unstuck_angle)
+            #    unstuck_orthor_force = unstuck_velocity * np.cos(unstuck_angle)
+            #    
+            #    return unstuck_rad_force, unstuck_orthor_force                
 #
-#                    # VORTEX Logic (Xoáy)
-#                    VORTEX_ANGLE = 0.4 
-#                    if drone_count_nearby > 2: VORTEX_ANGLE = 0.8 
+            #good_right = True
+            #for index in range(l_stuck[-1] + 1, l_stuck[-1] + 2 * nb_rays_around + 2):
 #
-#                    push_angle = data.angle + math.pi - VORTEX_ANGLE
-#                    
-#                    # total_fwd += ... (ignore, do not use)
-#                    total_lat += force_magnitude * math.sin(push_angle)
+            #    if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
 #
-#     
-#                
-#                # Force coefficient K. 
-#                # Since there is no longer forward braking force, we need a sufficiently strong lateral force to dodge in time.                    
-#                K = 400.0 
-#                if self.drone.not_grapsed: K = 0
-#                
-#                force_magnitude = K / (dist ** 2)
-#                force_magnitude = min(1.2, force_magnitude)
+            #        good_right = False
 #
-#                # VORTEX Logic (Xoáy)
-#                VORTEX_ANGLE = 0.4 
-#                if drone_count_nearby > 2: VORTEX_ANGLE = 0.8 
+            #if good_right: 
+            #    
+            #    unstuck_rad_force = - unstuck_velocity * np.sin(unstuck_angle)
+            #    unstuck_orthor_force = - unstuck_velocity * np.cos(unstuck_angle)
+            #    
+            #    return unstuck_rad_force, unstuck_orthor_force
 #
-#                push_angle = data.angle + math.pi - VORTEX_ANGLE
-#                
-#                # total_fwd += ... (ignore, do not use)
-#                total_lat += force_magnitude * math.sin(push_angle)
-#
-#        
-#        return 0.0, total_lat # Returns only lateral
+            ## we didn't manage to unstuck by moving left or right
+            #list_possible_paths = self.drone.nav.lidar_possible_paths()
+            #if list_possible_paths:
+            #    self.drone.current_target = list(list_possible_paths[-1][0])
+            #    print(self.drone.current_target)
+            
+        return (0,0)
+    
