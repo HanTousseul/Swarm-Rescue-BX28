@@ -445,13 +445,7 @@ class Navigator:
         for val in list_possible_area:
             x = val[0][0]
             y = val[0][1]
-            visited = False
-            for node in self.visited_node:
-                if math.hypot(x - node[0], y - node[1]) < 70.0:
-                    visited = True
-                    break
-            if not visited: 
-                self.edge[pos_key].append((x,y))
+            self.edge[pos_key].append((x,y))
 
     def visit(self, pos):
         if pos is not None:
@@ -558,7 +552,11 @@ class Navigator:
     
     def unstuck(self) -> None:
 
+        lidar_data = self.drone.lidar_values()
+        ray_angles = self.drone.ray_angles()
+
         Same_possible_path = 50
+        nb_rays_around = 5
 
         current_pos = self.drone.estimated_pos
         current_target = self.drone.current_target  
@@ -569,13 +567,71 @@ class Navigator:
         relative_dist = np.linalg.norm((current_pos[0] - current_target[0], current_pos[1] - current_target[1]))
 
         #print(relative_angle, relative_dist)
-        correct = self.correct_position(relative_angle, relative_dist)
+        
 
-        if correct is None: return
+        corresponding_index = round(np.rad2deg(relative_angle + math.pi)) // 2
+        stuck = False
+        l_stuck = []
 
-        print(correct)
-        if np.linalg.norm((correct[0][0] - current_pos[0], correct[0][1] - current_target[1])) > Same_possible_path:
+        for index in range(corresponding_index - nb_rays_around ,corresponding_index + nb_rays_around + 1):
 
-            self.drone.current_target = list(correct[0])
+            if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
 
-        return
+                stuck = True
+                l_stuck.append(index)
+
+        if stuck: 
+
+            good_left = True
+            for index in range(l_stuck[0] - 2 * nb_rays_around - 1, l_stuck[0]):
+
+                if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
+
+                    good_left = False
+
+            if good_left:
+
+                ray1 = l_stuck[0] - 2 * nb_rays_around - 1, ray_angles [(l_stuck[0] - 2 * nb_rays_around - 1) % 180]
+                ray2 = l_stuck[0], ray_angles [l_stuck[0]  % 180]
+
+                position_left, angle_left = self.compute_position(ray1, ray2)
+
+            good_right = True
+            for index in range(l_stuck[-1] + 1, l_stuck[-1] + 2 * nb_rays_around + 2):
+
+                if lidar_data[index % 180] < relative_dist + SAFE_DISTANCE:
+
+                    good_right = False
+
+            if not(good_left) and good_right:
+
+                ray1 = l_stuck[-1] + 1, ray_angles [(l_stuck[-1] + 1) % 180]
+                ray2 = l_stuck[-1] + 2 * nb_rays_around + 2, ray_angles [(l_stuck[-1] + 2 * nb_rays_around + 2)  % 180]
+
+                position_right, angle_right = self.compute_position(ray1, ray2)
+
+                self.drone.current_target = list(position_right)
+                return
+            
+            elif good_left and not(good_right):
+
+                self.drone.current_target = list(position_left)
+                return
+            
+            elif good_left and good_right:
+
+                if abs(angle_right - relative_angle) < abs(angle_left - relative_angle):
+
+                    self.drone.current_target = list(position_right)
+                    return
+                
+                else:
+
+                    self.drone.current_target = list(position_left)
+                    return
+
+            else:
+
+                self.drone.current_target = self.lidar_possible_paths().pop()
+            
+        return 

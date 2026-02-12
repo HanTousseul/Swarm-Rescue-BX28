@@ -27,7 +27,7 @@ class Pilot:
     def repulsive_force(self) -> tuple:
 
         
-        repulsion_coeff = 20
+        repulsion_coeff = 30
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
         nb_rays_wounded_pers = 10
@@ -49,7 +49,13 @@ class Pilot:
 
                     lidar_data[i % 180] = 300
 
-                force = 10 * repulsion_coeff / elt.distance ** 2 
+                if elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
+
+                    force = 3 * nb_rays_wounded_pers * repulsion_coeff / elt.distance ** 2 
+
+                else:
+
+                    force = 2 * nb_rays_wounded_pers * repulsion_coeff / elt.distance ** 2 
 
                 unit_vector_angle = elt.angle
 
@@ -69,6 +75,8 @@ class Pilot:
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
 
         if priority: total_orthor_repulsion = 0
+
+        #total_rad_repulsion = 0.7 * total_rad_repulsion
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
