@@ -62,7 +62,7 @@ class Pilot:
     
     def move_to_target_PID(self) -> CommandsDict:
         """
-        Your ORIGINAL control function + additional lateral force field.
+        Modified control function: Allows BACKWARD flight (Reversing) when RETURNING.
         """
 
         # If there is no target, stop completely
@@ -74,82 +74,98 @@ class Pilot:
         delta_y = self.drone.current_target[1] - self.drone.estimated_pos[1]
         dist_to_target = math.hypot(delta_x, delta_y)
 
+        # =========================================================
+        # [NEW LOGIC] REVERSE FLIGHT MODE (BAY LÙI)
+        # =========================================================
+        # Kiểm tra xem có nên bay lùi không?
+        # Chỉ bay lùi khi đang RETURNING (đang kéo nạn nhân về)
+        is_reversing = (self.drone.grasped_wounded_persons() and self.drone.state == 'RETURNING')
+
         # --------------------------------------------------
-        # 1. Rotate toward the target (PID rotation control)
+        # 1. Rotate control
         # --------------------------------------------------
         target_angle = math.atan2(delta_y, delta_x)
-        angle_error = normalize_angle(target_angle - self.drone.estimated_angle)
+        
+        if is_reversing:
+            # Nếu đang lùi: Hướng mũi drone NGƯỢC lại với hướng đích (quay lưng về đích)
+            desired_angle = normalize_angle(target_angle + math.pi)
+        else:
+            # Bình thường: Hướng mũi về đích
+            desired_angle = target_angle
+
+        angle_error = normalize_angle(desired_angle - self.drone.estimated_angle)
         
         rotation_cmd = KP_ROTATION * angle_error
         rotation_cmd = max(-1.0, min(1.0, rotation_cmd))
 
         # --------------------------------------------------
-        # 2. Forward movement (OLD LOGIC: slow & stable)
-        #    Gradual braking when approaching target
+        # 2. Forward movement (Speed Control)
         # --------------------------------------------------
-        MAX_SPEED = 0.5
+        MAX_SPEED = 0.6
         BRAKING_DIST = 150.0
         STOP_DIST = 15.0 
 
+        # Tính độ lớn vận tốc (Speed Magnitude) trước
         if dist_to_target > BRAKING_DIST:
-            forward_cmd = MAX_SPEED
+            speed_mag = MAX_SPEED
         elif dist_to_target > STOP_DIST:
-            forward_cmd = (dist_to_target / BRAKING_DIST) * MAX_SPEED
-            forward_cmd = max(0.1, forward_cmd)
+            speed_mag = (dist_to_target / BRAKING_DIST) * MAX_SPEED
+            speed_mag = max(0.15, speed_mag)
         else:
-            forward_cmd = 0.05
+            speed_mag = 0.1
+
+        # Nếu đang cứu người (RETURNING), ưu tiên tốc độ cao hơn
+        if self.drone.grasped_wounded_persons():
+            speed_mag = 0.7
+            if dist_to_target <= 45.0:
+                speed_mag = 0.55
+
+        # Gán dấu cho vận tốc: Tiến (+) hoặc Lùi (-)
+        if is_reversing:
+            forward_cmd = -speed_mag # Số âm để bay lùi
+        else:
+            forward_cmd = speed_mag
 
         # --------------------------------------------------
         # 3. Rotation discipline
-        #    Do NOT move forward if angle is too large
-        #    (prevents sliding while turning)
         # --------------------------------------------------
-        if abs(angle_error) > 0.2:
+        # Nếu chưa quay đúng hướng thì chưa di chuyển vội (tránh trượt)
+        if abs(angle_error) > 0.3: # Nới lỏng một chút lên 0.3
             forward_cmd = 0.0 
 
         forward_cmd = max(-1.0, min(1.0, forward_cmd))
-
-        # --------------------------------------------------
-        # Special logic when RETURNING (carrying a victim)
-        # Faster movement to reduce rescue time
-        # --------------------------------------------------
-        if self.drone.grasped_wounded_persons():
-            forward_cmd = 0.7
-            if dist_to_target <= 60.0:
-                forward_cmd = 0.45
 
         # Initialize default lateral command
         cmd_lateral = 0.0
 
         # --------------------------------------------------
-        # 4. Drone collision avoidance (OLD deadlock resolution)
-        # Hard safety layer to prevent drone-to-drone blocking
+        # 4. Drone collision avoidance
         # --------------------------------------------------
-        if forward_cmd > 0.05 and self.is_blocked_by_drone(safety_dist=60.0):
+        # Lưu ý: Khi bay lùi, forward_cmd là âm, nên check abs() hoặc check < -0.05
+        moving_fast = abs(forward_cmd) > 0.05
+        
+        if moving_fast and self.is_blocked_by_drone(safety_dist=60.0):
             forward_cmd = 0.0 
             cmd_lateral = -0.6 
 
-        # --------------------------------------------------
-        # 5. [NEW INTEGRATION] Add lateral repulsive force
-        # Only affects sideways motion, not forward speed
-        # --------------------------------------------------
-        _, rep_lat = self.calculate_repulsive_force()
+        # # --------------------------------------------------
+        # # 5. Lateral repulsive force
+        # # --------------------------------------------------
+        # _, rep_lat = self.calculate_repulsive_force()
         
-        # Accumulate lateral forces
-        cmd_lateral += rep_lat
-        
-        # Clamp lateral command
-        cmd_lateral = max(-1.0, min(1.0, cmd_lateral))
+        # # Lực đẩy tường/drone vẫn tác dụng đúng theo hướng trái/phải của thân drone
+        # # nên không cần đổi dấu cmd_lateral
+        # cmd_lateral += rep_lat
+        # cmd_lateral = max(-1.0, min(1.0, cmd_lateral))
 
         # --------------------------------------------------
         # Smart grasper logic
-        # Automatically grab/release depending on state
         # --------------------------------------------------
         grasper_val = 0
         if self.drone.state in ["RETURNING", "DROPPING"]:
             grasper_val = 1
         elif self.drone.state == "RESCUING":
-            if dist_to_target <= 15.0:
+            if dist_to_target <= 20.0:
                 grasper_val = 1
             else:
                 grasper_val = 0
@@ -160,20 +176,24 @@ class Pilot:
             grasper_val = 0
 
         # --------------------------------------------------
-        # Anti-stuck mechanism (near Rescue Center walls)
-        # Uses front LiDAR rays to detect close obstacles
-        # If blocked, slide sideways to escape
+        # Anti-stuck mechanism
         # --------------------------------------------------
         if self.drone.state in ["RETURNING", "END_GAME"] and dist_to_target < 100.0 and dist_to_target > 30.0:
             lidar_vals = self.drone.lidar_values()
             if lidar_vals is not None:
+                # [LƯU Ý QUAN TRỌNG KHI BAY LÙI]
+                # Khi bay lùi, hướng di chuyển là phía SAU.
+                # Sensor phía trước (front_rays) sẽ không phát hiện được tường phía sau lưng.
+                # Tuy nhiên, ta vẫn giữ logic này để tránh va mũi vào chướng ngại vật khi đang xoay sở.
+                
                 front_rays = lidar_vals[85:95] 
                 if len(front_rays) > 0:
                     min_front_dist = np.min(front_rays)
                     if min_front_dist < 15.0:
-                        forward_cmd = 0.0
-                        slide_force = 0.6 
+                        forward_cmd = 0.0 # Dừng lại
                         
+                        # Trượt ngang để né
+                        slide_force = 0.6 
                         if abs(angle_error) < 0.1:
                             cmd_lateral = -slide_force 
                         elif angle_error > 0:
