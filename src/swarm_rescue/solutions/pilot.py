@@ -5,13 +5,18 @@ from swarm_rescue.simulation.utils.utils import normalize_angle
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 
 class Pilot:
+    """
+    Low-level controller. Converts high-level targets (waypoints) into 
+    motor commands (forward, lateral, rotation, grasper).
+    Handles Obstacle Avoidance (Repulsion) and kinematics.
+    """
     def __init__(self, drone):
         self.drone = drone
         self.last_pos = None
         self.current_speed = 0.0
 
     def calculate_repulsive_force(self):
-        """Lực né Drone đồng đội."""
+        """Calculates repulsive force to avoid colliding with other drones."""
         total_lat = 0.0
         semantic_data = self.drone.semantic_values()
         if not semantic_data: return 0.0, 0.0
@@ -27,8 +32,14 @@ class Pilot:
                     total_lat += force_magnitude * math.sin(push_angle)
         return 0.0, total_lat
 
-    def calculate_wall_repulsion(self, aggressive: bool = False, angle_error: float = 0.0): # [UPDATE] Thêm tham số angle_error
-        """Lực né Tường."""
+    def calculate_wall_repulsion(self, aggressive: bool = False, angle_error: float = 0.0):
+        """
+        Calculates wall repulsion forces using Lidar.
+        
+        Args:
+            aggressive (bool): If True, allows getting closer to walls (smaller exclusion zone).
+            angle_error (float): Current alignment error. Used to reduce repulsion if aimed correctly.
+        """
         lidar = self.drone.lidar_values()
         angles = self.drone.lidar_rays_angles()
         if lidar is None or angles is None: return 0.0, 1.0 
@@ -36,14 +47,14 @@ class Pilot:
         total_lat = 0.0
         min_dist_detected = 300.0
 
+        # Tuning Parameters
         if aggressive:
             K_wall = 150.0; ignore_dist = 40.0; critical_dist = 10.0; slow_down_threshold = 40.0
         else:
             K_wall = 400.0; ignore_dist = 80.0; critical_dist = 20.0; slow_down_threshold = 60.0
 
-        # [NEW] Logic giảm lực đẩy khi đang đi đúng hướng (Lách qua cửa)
-        # Nếu góc lệch nhỏ (< 10 độ), chứng tỏ ta đang chủ đích lao vào khe đó
-        # -> Giảm K_wall đi một nửa để không bị bật ra
+        # [SMART REPULSION] If aimed correctly at a gap (small angle error), 
+        # reduce wall repulsion to allow the drone to slip through.
         if abs(angle_error) < 0.2:
             K_wall *= 0.4
 
@@ -52,18 +63,25 @@ class Pilot:
             dist = lidar[i]
             if 10.0 < dist < ignore_dist:
                 if dist < min_dist_detected: min_dist_detected = dist
+                
+                # Force is inversely proportional to distance^1.8
                 force = K_wall / (dist ** 1.8)
                 force = min(1.0, force) 
+
                 angle_obs = angles[i]
                 push_angle = angle_obs + math.pi 
                 total_lat += force * math.sin(push_angle)
 
+        # Calculate speed reduction factor based on proximity to walls
         speed_factor = np.clip((min_dist_detected - critical_dist) / slow_down_threshold, 0.3, 1.0)
         if aggressive: speed_factor = max(0.5, speed_factor)
 
         return total_lat, speed_factor
 
     def move_to_target_carrot(self) -> CommandsDict:
+        """
+        Main control loop using 'Carrot Chasing' logic.
+        """
         if self.drone.current_target is None:
             return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
 
@@ -80,10 +98,13 @@ class Pilot:
 
         is_reversing = (self.drone.grasped_wounded_persons() and self.drone.state == 'RETURNING')
         
-        # Final Approach: Cực gần (< 25cm) và đang đi cứu
+        # "SUICIDE MODE" / FINAL APPROACH: 
+        # If very close to target during rescue, disable safety to ensure contact.
         is_final_approach = (self.drone.state == 'RESCUING' and dist_to_target < 25.0)
+        
         is_aggressive = (self.drone.state == 'RESCUING') or (dist_to_target < 80.0)
 
+        # 2. Rotation Control
         if is_reversing:
             desired_angle = normalize_angle(target_angle + math.pi)
         else:
@@ -91,38 +112,42 @@ class Pilot:
 
         angle_error = normalize_angle(desired_angle - self.drone.estimated_angle)
         
-        # [TUNE] Giảm KP xuống để bớt lắc
+        # Tune KP based on phase
         if is_final_approach:
-            KP_ROT = 4.0 # Gần đích thì xoay mạnh hơn chút để align
+            KP_ROT = 4.0 # Stronger rotation to align for grasp
         else:
-            KP_ROT = 2.5 # Bình thường xoay từ tốn thôi
+            KP_ROT = 2.5 # Smoother rotation for travel
 
         rotation_cmd = KP_ROT * angle_error
         rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
 
+        # 3. Velocity and Wall Avoidance
         wall_lat, wall_speed_factor = self.calculate_wall_repulsion(aggressive=is_aggressive, angle_error=angle_error)
 
         if is_final_approach:
-            wall_lat = 0.0 
-            wall_speed_factor = 1.0 
+            wall_lat = 0.0          # Disable wall repulsion
+            wall_speed_factor = 1.0 # Disable speed reduction
 
         MAX_SPEED = 1.2 
         
-        # [NEW] ALIGN THEN MOVE: Nếu góc lệch lớn, giảm tốc độ tiến
-        # cos^5 phạt rất nặng nếu góc lệch > 30 độ -> Drone sẽ tự chậm lại để xoay
+        # ALIGN THEN MOVE: If angle error is large, reduce forward speed significantly.
+        # This prevents "drifting" while turning.
         alignment_factor = max(0.0, math.cos(angle_error) ** 5)
         
         forward_cmd = MAX_SPEED * alignment_factor * wall_speed_factor
 
-        # Active Braking
+        # 4. Active Braking
         BRAKE_DIST = 60.0 
         if dist_to_target < BRAKE_DIST:
-            forward_cmd = max(0.15, dist_to_target * 0.03) # Giữ min speed 0.15 để không dừng hẳn
+            # Maintain a minimum 'nudge' speed (0.15) to ensure we reach the target
+            forward_cmd = max(0.15, dist_to_target * 0.03) 
+            # Apply reverse thrust if moving too fast
             if self.current_speed > 5.0: forward_cmd = -0.5 
 
         if is_reversing: forward_cmd = -forward_cmd
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
 
+        # 5. Lateral Control (Drone + Wall Repulsion)
         cmd_lateral = 0.0
         _, drone_lat = self.calculate_repulsive_force()
         cmd_lateral = drone_lat + wall_lat
@@ -130,8 +155,9 @@ class Pilot:
         if abs(angle_error) > 0.5 and not is_reversing:
             cmd_lateral += -0.5 * np.sign(angle_error) # Drift assist
 
-        # [FIX] FRONT GRASP ONLY: Chỉ gắp khi mặt hướng về nạn nhân
-        # abs(angle_error) < 1.0 (khoảng 60 độ) và khoảng cách < 25cm
+        # 6. Grasper Control
+        # Only activate if close enough (<20cm) AND aligned (angle error < 1.0 rad)
+        # This prevents grasping with the back/side of the drone.
         can_grasp = (dist_to_target < 20.0) and (abs(angle_error) < 1.0)
         
         grasper_val = 1 if (self.drone.grasped_wounded_persons() or (self.drone.state == "RESCUING" and can_grasp)) else 0
