@@ -96,6 +96,7 @@ class CommunicatorHandler:
     def create_new_message(self) -> dict:
         '''
         This function handles the creation of the message to be communicated by the drone
+        we only send the map every 50 timestep to optimise the code further
         
         :param self: self
         :return: All information necessary to be communicated
@@ -106,7 +107,7 @@ class CommunicatorHandler:
                         'position' : self.drone.estimated_pos,
                         'state' : self.drone.state,
                         'grasping' : True if self.drone.grasped_wounded_persons() else False,
-                        'obstacle_map' : self.drone.nav.obstacle_map.grid
+                        'obstacle_map' : self.drone.nav.obstacle_map.grid if self.drone.cnt_timestep % 50 == 0 else None
         }
 
         return return_dict
