@@ -12,7 +12,7 @@ class VictimManager:
         # List of victims. Each record: {'id': str, 'pos': np.array, 'ts': int}
         self.registry = []
         self.next_id = 0
-        self.merge_threshold = 80.0 # Distance threshold (cm) to consider two points as the same victim
+        self.merge_threshold = 80.0 # Distance threshold (pixels) to consider two points as the same victim
 
     def update_from_sensor(self, drone_pos, drone_angle, semantic_data, current_step):
         """
@@ -24,6 +24,10 @@ class VictimManager:
             semantic_data: Data from the semantic sensor.
             current_step: Current simulation timestep.
         """
+        # Filter out victims that are physically too close to another drone.
+        # Threshold: 30 pixels (Assumes if a victim is <30 pixels from a drone, it is being carried or rescued).
+        SAFE_DISTANCE_FROM_OTHER_DRONE = 30.0 
+        
         if not semantic_data: return
 
         observed_victims = []
@@ -46,9 +50,6 @@ class VictimManager:
                 observed_drones.append(pos)
 
         # 2. ANTI-STEAL LOGIC
-        # Filter out victims that are physically too close to another drone.
-        # Threshold: 30cm (Assumes if a victim is <30cm from a drone, it is being carried or rescued).
-        SAFE_DISTANCE_FROM_OTHER_DRONE = 30.0 
 
         for v_pos in observed_victims:
             is_being_carried = False

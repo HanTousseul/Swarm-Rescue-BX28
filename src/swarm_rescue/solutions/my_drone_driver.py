@@ -10,10 +10,12 @@ from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSeman
 try:
     from .navigator import Navigator
     from .pilot import Pilot
+    from .communicator import CommunicatorHandler
     from .victim_manager import VictimManager
 except ImportError:
     from navigator import Navigator
     from pilot import Pilot
+    from communicator import CommunicatorHandler
     from victim_manager import VictimManager
 
 class MyStatefulDrone(DroneAbstract):
@@ -37,6 +39,7 @@ class MyStatefulDrone(DroneAbstract):
         # --- INITIALIZE COMPONENTS ---
         self.nav = Navigator(self)
         self.pilot = Pilot(self)
+        self.comms = CommunicatorHandler(self)
         self.victim_manager = VictimManager()
         
         # --- STATE VARIABLES ---
@@ -125,6 +128,10 @@ class MyStatefulDrone(DroneAbstract):
                 window_name=f"Obstacle Map - Drone {self.identifier}"
             )
 
+        # 4 Get messages:
+
+        self.comms.process_incoming_messages()
+
         # ================= STATE MACHINE =================
 
         # --- STATE: DISPERSING ---
@@ -144,7 +151,7 @@ class MyStatefulDrone(DroneAbstract):
             if self.is_inside_return_area: self.state = "END_GAME"
             else:
                 if self.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                    print(f"[{self.identifier}] 🔋 LOW BATTERY! Returning home.")
+                    print(f"[{self.identifier}] 🔋 LOW BATTERY! Returning home: {self.cnt_timestep}")
                     self.state = "RETURNING"
                     self.current_target = None 
 

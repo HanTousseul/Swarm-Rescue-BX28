@@ -161,7 +161,7 @@ class Pilot:
         # This prevents the "deadlock" where it waits for perfect angle.
         
         grasper_val = 1 if (self.drone.grasped_wounded_persons() or (self.drone.state == "RESCUING" and dist_to_target < 60)) else 0
-        print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
+        #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
 
         return {
             "forward": forward_cmd,
