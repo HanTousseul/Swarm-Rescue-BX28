@@ -119,7 +119,7 @@ class MyStatefulDrone(DroneAbstract):
             print(f"[{self.identifier}] 🚫 Masked Rescue Center area.")
 
         # Debug visualization (Drone 0 only)
-        if self.cnt_timestep % 5 == 0 and self.identifier == 0:
+        if self.cnt_timestep % 5 == 0:
             self.nav.obstacle_map.display(
                 self.estimated_pos, 
                 current_target=self.current_target,

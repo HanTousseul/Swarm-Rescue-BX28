@@ -78,26 +78,18 @@ class CommunicatorHandler:
             for y in range(len(obs_map)):
                 for x in range(len(obs_map[y])):
 
-                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.collaborative_map[y][x][drone_id]
+                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
 
-                    if diff == 0: continue
-                    
-                    if x % len(obs_map[y])//20 == 0: print(diff) #test
-                     
-                    self.drone.nav.obstacle_map.collaborative_map[y][x][drone_id] += obs_map[y][x]
-                    current_value = self.drone.nav.obstacle_map.grid[y][x]
-                    self.drone.nav.obstacle_map.grid[y][x] = 0
+                    if obs_map[y][x] > 0:
 
-                    for i in range(10):
-                        self.drone.nav.obstacle_map.grid[y][x] += self.drone.nav.obstacle_map.collaborative_map[y][x][i] // 10
+                        if diff <= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
 
-                    if current_value + diff > THRESHOLD_MAX:
+                    else:
+                        if diff >= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
 
-                        self.drone.nav.obstacle_map.grid[y][x] = THRESHOLD_MAX
-
-                    elif current_value + diff < THRESHOLD_MIN: 
-
-                        self.drone.nav.obstacle_map.grid[y][x] = THRESHOLD_MIN
+                    self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
     
