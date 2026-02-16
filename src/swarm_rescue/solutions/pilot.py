@@ -29,7 +29,6 @@ class Pilot:
         Only calculate the force to get the Lateral (dodge) component.
         """
         total_lat = 0.0
-        #We no longer need the total_fwd, but we still include it to ensure the vortex logic works correctly.
         
         semantic_data = self.drone.semantic_values()
         if not semantic_data: return 0.0, 0.0
@@ -178,7 +177,7 @@ class Pilot:
         # --------------------------------------------------
         # Anti-stuck mechanism
         # --------------------------------------------------
-        if self.drone.state in ["RETURNING", "END_GAME"] and dist_to_target < 100.0 and dist_to_target > 30.0:
+        if self.drone.state in ["RETURNING", "END_GAME"] and 30 < dist_to_target < 100:
             lidar_vals = self.drone.lidar_values()
             if lidar_vals is not None:
                 # [LƯU Ý QUAN TRỌNG KHI BAY LÙI]
