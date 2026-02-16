@@ -33,12 +33,11 @@ class CommunicatorHandler:
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
 
-            for elt in msg_package['victim_list']:
+            for elt in content['victim_list']:
 
                 if elt not in self.drone.victim_manager.registry:
                 
                    self.drone.victim_manager.registry.append(elt)  
-
         self.consolidate_maps()
         return          
 
@@ -109,12 +108,14 @@ class CommunicatorHandler:
             victim = self.drone.best_victim_pos
         
         else: victim = None
-
+        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
+            obstacle_map = self.drone.nav.obstacle_map.grid  
+        else: obstacle_map = None
         return_dict =   {'id' : self.drone.identifier,
                         'position' : self.drone.estimated_pos,
                         'state' : self.drone.state,
                         'grasping' : True if self.drone.grasped_wounded_persons() else False,
-                        'obstacle_map' : self.drone.nav.obstacle_map.grid if self.drone.cnt_timestep % (5 * self.drone.identifier) == 0 else None,
+                        'obstacle_map' : obstacle_map,
                         'priority': self.priority(),
                         'victim_list': self.drone.victim_manager.registry,
                         'victim_chosen': victim

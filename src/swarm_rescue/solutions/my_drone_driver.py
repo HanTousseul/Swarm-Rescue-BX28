@@ -173,6 +173,7 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- STATE: EXPLORING ---
         if self.state == "EXPLORING":
+            self.best_victim_pos = None
             if self.blacklist_timer > 0: self.blacklist_timer -= 1
             else: self.blacklisted_targets = []
 
@@ -379,4 +380,5 @@ class MyStatefulDrone(DroneAbstract):
         return command
 
     def define_message_for_all(self):
-        pass
+        comm_dict = self.comms.create_new_message()
+        return comm_dict
