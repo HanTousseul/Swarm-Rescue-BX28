@@ -10,13 +10,11 @@ from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSeman
 try:
     from .navigator import Navigator
     from .pilot import Pilot
-    from .communicator import CommunicatorHandler
     from .victim_manager import VictimManager
 except ImportError:
     from navigator import Navigator
     from pilot import Pilot
     from victim_manager import VictimManager
-    from communicator import CommunicatorHandler
 
 class MyStatefulDrone(DroneAbstract):
     """
@@ -39,7 +37,6 @@ class MyStatefulDrone(DroneAbstract):
         # --- INITIALIZE COMPONENTS ---
         self.nav = Navigator(self)
         self.pilot = Pilot(self)
-        self.comms = CommunicatorHandler(self)
         self.victim_manager = VictimManager()
         
         # --- STATE VARIABLES ---
@@ -65,6 +62,7 @@ class MyStatefulDrone(DroneAbstract):
         
         # Counts consecutive pathfinding failures to implement "Patience" before blacklisting
         self.path_fail_count = 0 
+        self.patience_path_rescue = 0
 
     def control(self) -> CommandsDict:
         """
@@ -119,7 +117,7 @@ class MyStatefulDrone(DroneAbstract):
             print(f"[{self.identifier}] 🚫 Masked Rescue Center area.")
 
         # Debug visualization (Drone 0 only)
-        if self.cnt_timestep % 5 == 0:
+        if self.cnt_timestep % 5 == 0 and self.identifier == 0:
             self.nav.obstacle_map.display(
                 self.estimated_pos, 
                 current_target=self.current_target,
@@ -172,7 +170,7 @@ class MyStatefulDrone(DroneAbstract):
             else: self.blacklisted_targets = []
 
             # 1. Check for Victims (Highest Priority)
-            best_victim_pos = self.victim_manager.get_nearest_victim(self.estimated_pos)
+            best_victim_pos = self.victim_manager.get_nearest_victim(self.estimated_pos, self.blacklisted_targets)
 
             # Ignore victims at home base (already rescued)
             if best_victim_pos is not None and self.rescue_center_pos is not None:
@@ -230,13 +228,16 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- STATE: RESCUING ---
         elif self.state == "RESCUING":
+            if len(self.nav.current_astar_path) == 0: self.patience_path_rescue += 1
+            if self.patience_path_rescue >= 50:
+                self.state = 'EXPLORING'
+                self.patience_path_rescue = 0
             dist_to_target = 9999
             if self.current_target is not None:
                 dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target)
             if dist_to_target < 40: self.rescue_time += 1
 
             # Logic: Ray Walking to find a safe standing point near the victim
-            victim_in_sight = False
             if semantic_data:
                 for data in semantic_data:
                     if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and not data.grasped:
@@ -288,7 +289,7 @@ class MyStatefulDrone(DroneAbstract):
             self.current_target = self.rescue_center_pos
             if check_center: self.drop_step += 1
             # Wait for drop confirmation or timeout
-            if self.drop_step > 150 or not self.grasped_wounded_persons(): 
+            if self.drop_step > 100 or not self.grasped_wounded_persons(): 
                 print(f"[{self.identifier}] ⏬ DROPPED! Going Explore.")
                 self.drop_step = 0
                 self.nav.current_astar_path = []
@@ -305,25 +306,31 @@ class MyStatefulDrone(DroneAbstract):
         next_waypoint = None
 
         # [PATH VALIDATION] Check if Navigator failed to find a path
+
         if self.current_target is not None:
             dist = np.linalg.norm(self.estimated_pos - self.current_target)
-            
-            # If path is empty but we are far from target, A* failed.
-            if len(self.nav.current_astar_path) == 0 and dist > 40.0:
-                self.path_fail_count += 1 
-                
-                # Patience Check: Only blacklist if it fails consistently for > 30 ticks
-                if self.path_fail_count > 30:
-                    print(f"[{self.identifier}] ❌ Path failed to {self.current_target} ({self.path_fail_count} ticks). Blacklisting!")
-                    self.blacklisted_targets.append(self.current_target)
-                    self.blacklist_timer = 200 
-                    self.current_target = None 
-                    self.path_fail_count = 0
-                    return {"forward": 0.0, "lateral": 0.0, "rotation": 1.0, "grasper": 0} 
-                else:
-                    pass # Give it more time to replan
-            else:
+
+            if dist < 30:
+                # print('Switch to target instead of waypoint!')
+                next_waypoint = self.current_target
                 self.path_fail_count = 0
+            else:            
+                # If path is empty but we are far from target, A* failed.
+                if len(self.nav.current_astar_path) == 0 and dist > 10.0:
+                    self.path_fail_count += 1 
+                    
+                    # Patience Check: Only blacklist if it fails consistently for > 30 ticks
+                    if self.path_fail_count > 60:
+                        print(f"[{self.identifier}] ❌ Path failed to {self.current_target} ({self.path_fail_count} ticks). Blacklisting!")
+                        self.blacklisted_targets.append(self.current_target)
+                        self.blacklist_timer = 200 
+                        self.current_target = None 
+                        self.path_fail_count = 0
+                        return {"forward": 0.0, "lateral": 0.0, "rotation": 1.0, "grasper": 0} 
+                    else:
+                        pass # Give it more time to replan
+                else:
+                    self.path_fail_count = 0
 
         if self.current_target is not None:
             next_waypoint = self.nav.get_next_waypoint(self.current_target)
@@ -365,6 +372,4 @@ class MyStatefulDrone(DroneAbstract):
         return command
 
     def define_message_for_all(self):
-        
-        comm_dict = self.comms.create_new_message()
-        return comm_dict
+        pass

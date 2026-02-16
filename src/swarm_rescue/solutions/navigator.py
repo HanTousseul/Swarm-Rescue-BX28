@@ -2,7 +2,6 @@ import math
 import numpy as np
 from typing import List, Tuple, Optional
 from swarm_rescue.simulation.utils.utils import normalize_angle
-from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 
 try:
     from .mapping import GridMap
@@ -61,7 +60,6 @@ class Navigator:
         lidar_angles = self.drone.lidar_rays_angles()
         if lidar_data is not None:
             self.obstacle_map.update_from_lidar(self.drone.estimated_pos, self.drone.estimated_angle, lidar_data, lidar_angles)
-            self.drone.comms.incoming_messages_maps()
 
     def find_nearest_walkable(self, target_pos: np.ndarray, search_radius_grid: int = 10) -> Optional[np.ndarray]:
         """BFS search to find the nearest valid walkable point if the target is inside a wall."""
