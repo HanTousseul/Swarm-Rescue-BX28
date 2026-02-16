@@ -39,9 +39,6 @@ class GridMap:
         wy = (gy * self.resolution) - self.offset_y + (self.resolution / 2)
         return wx, wy
     
-    # [ĐÃ XÓA] update_from_remote_points
-    # [ĐÃ XÓA] update_from_trajectory
-
     def update_from_lidar(self, drone_pos: np.ndarray, drone_angle: float, lidar_data: List[float], lidar_angles: List[float], nearby_drones_pos: List[np.ndarray] = [], nearby_victims_pos: List[np.ndarray] = []):
         if lidar_data is None or lidar_angles is None: return
         cx, cy = self.world_to_grid(drone_pos[0], drone_pos[1])
@@ -86,12 +83,8 @@ class GridMap:
     def update_cost_map(self):
         binary_grid = (self.grid <= 20.0).astype(np.uint8)
         self.dist_map = cv2.distanceTransform(binary_grid, cv2.DIST_L2, 5)
-        
-        # [TUNE] GIẢM SAFETY WEIGHT ĐỂ CHẤP NHẬN ĐI GẦN TƯỜNG HƠN
         SAFETY_WEIGHT = 300.0 
-        
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
-        
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
         UNKNOWN_PENALTY = 100.0 
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
@@ -101,8 +94,6 @@ class GridMap:
         self.update_cost_map()
         self.dijkstra_grid = np.full_like(self.grid, np.inf)
         gx_t, gy_t = self.world_to_grid(target_pos[0], target_pos[1])
-        
-        # Chấp nhận điểm đến hơi sát tường (Cost < 600 thay vì 100)
         if self.cost_map[gy_t, gx_t] > 1000:
              found = False
              for r in range(1, 10):
@@ -115,11 +106,9 @@ class GridMap:
                                  found = True; break
                      if found: break
                  if found: break
-
         self.dijkstra_grid[gy_t, gx_t] = 0.0
         pq = [(0.0, gx_t, gy_t)] 
         neighbors = [(0, 1, 1.0), (0, -1, 1.0), (1, 0, 1.0), (-1, 0, 1.0), (1, 1, 1.414), (1, -1, 1.414), (-1, 1, 1.414), (-1, -1, 1.414)]
-
         while pq:
             curr_val, cx, cy = heapq.heappop(pq)
             if curr_val > self.dijkstra_grid[cy, cx]: continue
@@ -138,7 +127,6 @@ class GridMap:
         cx, cy = self.world_to_grid(current_pos[0], current_pos[1])
         path = [] 
         curr_x, curr_y = cx, cy
-        
         for _ in range(max_steps):
             min_val = self.dijkstra_grid[curr_y, curr_x]
             best_n = None
@@ -163,14 +151,12 @@ class GridMap:
         sx, sy = self.world_to_grid(start_pos[0], start_pos[1])
         ex, ey = self.world_to_grid(end_pos[0], end_pos[1])
         self.update_cost_map()
-        if self.cost_map[ey, ex] > 2000: return [] # Chỉ chặn nếu thực sự là tường cứng
-
+        if self.cost_map[ey, ex] > 2000: return [] 
         open_list = []
         heapq.heappush(open_list, (0, sx, sy))
         came_from = {}
         g_score = { (sx, sy): 0 }
         neighbors = [(0,1,1), (0,-1,1), (1,0,1), (-1,0,1), (1,1,1.4), (1,-1,1.4), (-1,1,1.4), (-1,-1,1.4)]
-        
         while open_list:
             _, cx, cy = heapq.heappop(open_list)
             if (cx, cy) == (ex, ey):
@@ -182,7 +168,6 @@ class GridMap:
                     curr = came_from[curr]
                 path.reverse()
                 return path
-            
             for dx, dy, move_cost in neighbors:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
@@ -196,11 +181,12 @@ class GridMap:
                         came_from[(nx, ny)] = (cx, cy)
         return []
     
-    def get_frontier_target(self, drone_pos: np.ndarray, drone_angle: float, busy_targets: List[dict] = [], nearby_drones: List[np.ndarray] = []) -> Optional[np.ndarray]:
+    def get_frontier_target(self, drone_pos: np.ndarray, drone_angle: float, drone_id: int, current_step: int, 
+                            busy_targets: List[dict] = [], nearby_drones: List[np.ndarray] = [],
+                            rescue_center_pos: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
         cx, cy = self.world_to_grid(drone_pos[0], drone_pos[1])
         candidates = []
         step = 3 
-        
         for y in range(0, self.grid_h, step):
             for x in range(0, self.grid_w, step):
                 if -5.0 < self.grid[y, x] < 5.0: 
@@ -216,15 +202,22 @@ class GridMap:
         if not candidates: return None
         best_target = None; min_cost = float('inf')
         
-        MIN_DIST_PREFERRED = 80.0; ANGLE_WEIGHT = 40.0; DENSITY_REWARD = 50.0; WALL_PENALTY_WEIGHT = 2000.0; WALL_CHECK_RADIUS = 4
-        CROWD_RADIUS = 250.0; CROWD_PENALTY = 5000.0 
-
         from swarm_rescue.simulation.utils.utils import normalize_angle
-        
+
+        MIN_DIST_PREFERRED = 80.0; ANGLE_WEIGHT = 20.0; DENSITY_REWARD = 50.0; WALL_PENALTY_WEIGHT = 2000.0; WALL_CHECK_RADIUS = 4
+        CROWD_RADIUS = 300.0; CROWD_PENALTY = 3000.0 
+        CENTER_X = self.map_width / 2.0; CENTER_Y = self.map_height / 2.0
+        EARLY_GAME_STEPS = 800; LAVA_RADIUS = 350.0; LAVA_PENALTY = 10000.0; BIAS_WEIGHT = 3.0         
+        RC_BAN_RADIUS = 250.0 
+
         for (gx, gy) in candidates:
             wx, wy = self.grid_to_world(gx, gy)
             
-            # Chỉ check busy local (trong thực tế là rỗng)
+            # [FIX] LỌC CỨNG RESCUE CENTER
+            if rescue_center_pos is not None:
+                dist_to_rc = math.hypot(wx - rescue_center_pos[0], wy - rescue_center_pos[1])
+                if dist_to_rc < RC_BAN_RADIUS: continue
+
             is_busy = False
             for item in busy_targets:
                 if math.hypot(wx - item['pos'][0], wy - item['pos'][1]) < 60.0: is_busy = True; break
@@ -235,6 +228,16 @@ class GridMap:
                 d_dist = math.hypot(wx - d_pos[0], wy - d_pos[1])
                 if d_dist < CROWD_RADIUS:
                     crowd_cost += CROWD_PENALTY * (1.0 - d_dist/CROWD_RADIUS)
+
+            bias_cost = 0.0
+            if drone_id % 2 == 0: bias_cost = wx * BIAS_WEIGHT
+            else: bias_cost = (self.map_width - wx) * BIAS_WEIGHT
+
+            lava_cost = 0.0
+            dist_to_center = math.hypot(wx - CENTER_X, wy - CENTER_Y)
+            if current_step < EARLY_GAME_STEPS:
+                if dist_to_center < LAVA_RADIUS:
+                    lava_cost = LAVA_PENALTY * (1.0 - dist_to_center/LAVA_RADIUS)
 
             dist = math.hypot(wx - drone_pos[0], wy - drone_pos[1])
             dist_penalty = 0
@@ -252,7 +255,7 @@ class GridMap:
             unknown_count = np.sum(np.abs(self.grid[y_min:y_max, x_min:x_max]) < 5.0)
             density_bonus = unknown_count * DENSITY_REWARD
 
-            cost = dist + (angle_diff * ANGLE_WEIGHT) + dist_penalty - density_bonus + wall_penalty + crowd_cost
+            cost = dist + (angle_diff * ANGLE_WEIGHT) + dist_penalty - density_bonus + wall_penalty + crowd_cost + bias_cost + lava_cost
             if cost < min_cost: min_cost = cost; best_target = np.array([wx, wy])
         return best_target
 
@@ -290,7 +293,6 @@ class GridMap:
         steps = int(dist / (self.resolution / 2)); 
         if steps == 0: steps = 1
         xs = np.linspace(x0, x1, steps); ys = np.linspace(y0, y1, steps)
-        # [TUNE] Cho phép LOS đi qua vùng cost cao hơn chút (Cost 200)
         SAFE_COST_THRESHOLD = 300.0 
         for x, y in zip(xs, ys):
             gx, gy = self.world_to_grid(x, y)
@@ -331,81 +333,14 @@ class GridMap:
         display_img = cv2.resize(heatmap_img, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
         display_img = cv2.flip(display_img, 0) 
         cv2.imshow(window_name, display_img); cv2.waitKey(1)
-
-class VictimHeatmap:
-    def __init__(self, map_size: Tuple[int, int], resolution: int = 8):
-        self.map_width = map_size[0]; self.map_height = map_size[1]; self.resolution = resolution
-        self.offset_x = self.map_width / 2.0; self.offset_y = self.map_height / 2.0
-        self.grid_w = int(self.map_width / self.resolution) + 1; self.grid_h = int(self.map_height / self.resolution) + 1
-        self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
-        self.decay_rate = 1.0; self.score_add = 10.0; self.max_score = 100.0
-        self.permanent_ignored_zones = []
-
-    def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
-        gx = int((x + self.offset_x) / self.resolution); gy = int((y + self.offset_y) / self.resolution)
-        gx = max(0, min(gx, self.grid_w - 1)); gy = max(0, min(gy, self.grid_h - 1)); return gx, gy
-    def grid_to_world(self, gx: int, gy: int) -> Tuple[float, float]:
-        wx = (gx * self.resolution) - self.offset_x + (self.resolution / 2); wy = (gy * self.resolution) - self.offset_y + (self.resolution / 2); return wx, wy
     
-    def update_from_semantic(self, drone_pos: np.ndarray, drone_angle: float, semantic_data):
-        cx, cy = self.world_to_grid(drone_pos[0], drone_pos[1]); radius = 8
-        y_indices, x_indices = np.ogrid[:self.grid_h, :self.grid_w]
-        dist_from_center = np.sqrt((x_indices - cx)**2 + (y_indices - cy)**2)
-        mask = dist_from_center <= radius; self.grid[mask] -= self.decay_rate
-        if semantic_data:
-            from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
-            for data in semantic_data:
-                if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
-                    angle_global = drone_angle + data.angle
-                    vx = drone_pos[0] + data.distance * math.cos(angle_global); vy = drone_pos[1] + data.distance * math.sin(angle_global)
-                    gx, gy = self.world_to_grid(vx, vy)
-                    y_min = max(0, gy-1); y_max = min(self.grid_h, gy+2); x_min = max(0, gx-1); x_max = min(self.grid_w, gx+2)
-                    self.grid[y_min:y_max, x_min:x_max] += self.score_add
-        self.grid = np.clip(self.grid, 0, self.max_score)
-
-    def get_highest_score_target(self, obstacle_map: Optional['GridMap'] = None) -> Optional[np.ndarray]:
-        search_grid = self.grid.copy()
-        for ignored_pos in self.permanent_ignored_zones:
-             igx, igy = self.world_to_grid(ignored_pos[0], ignored_pos[1])
-             y_min = max(0, igy - 5); y_max = min(self.grid_h, igy + 6)
-             x_min = max(0, igx - 5); x_max = min(self.grid_w, igx + 6)
-             search_grid[y_min:y_max, x_min:x_max] = 0.0
-
-        max_val = np.max(search_grid)
-        if max_val < 30.0: return None
-        
-        gy, gx = np.unravel_index(np.argmax(search_grid), search_grid.shape)
-        
-        if obstacle_map is not None:
-            if hasattr(obstacle_map, 'cost_map') and obstacle_map.cost_map is not None:
-                def is_safe(x, y):
-                    if 0 <= x < obstacle_map.grid_w and 0 <= y < obstacle_map.grid_h:
-                        # [TUNE] Chấp nhận điểm đến sát tường (Cost 400)
-                        return obstacle_map.cost_map[y, x] < 400.0
-                    return False
-                if not is_safe(gx, gy):
-                    found_safe = False
-                    for r in range(1, 8):
-                        candidates = []
-                        for d in range(-r, r + 1):
-                            candidates.append((gx + d, gy - r)); candidates.append((gx + d, gy + r))
-                            candidates.append((gx - r, gy + d)); candidates.append((gx + r, gy + d))
-                        for cx, cy in candidates:
-                            if is_safe(cx, cy):
-                                gx, gy = cx, cy; found_safe = True; break
-                        if found_safe: break
-                    
-        wx, wy = self.grid_to_world(gx, gy)
-        return np.array([wx, wy])
-
-    def clear_area(self, center_pos: np.ndarray, radius_grid: int = 5):
+    # [NEW] Hàm bịt Frontier tại Rescue Center
+    def mask_rescue_center(self, center_pos: np.ndarray):
         if center_pos is None: return
-        gx, gy = self.world_to_grid(center_pos[0], center_pos[1])
-        y_min = max(0, gy - radius_grid); y_max = min(self.grid_h, gy + radius_grid + 1)
-        x_min = max(0, gx - radius_grid); x_max = min(self.grid_w, gx + radius_grid + 1)
-        self.grid[y_min:y_max, x_min:x_max] = 0.0
-    
-    def add_to_permanent_blacklist(self, center_pos: np.ndarray):
-        if center_pos is None: return
-        self.permanent_ignored_zones.append(center_pos.copy())
-        self.clear_area(center_pos, radius_grid=8)
+        RC_WIDTH = 150.0; RC_HEIGHT = 260.0
+        cx, cy = self.world_to_grid(center_pos[0], center_pos[1])
+        w_grid = int((RC_WIDTH / 2) / self.resolution) + 2
+        h_grid = int((RC_HEIGHT / 2) / self.resolution) + 2
+        y_min = max(0, cy - h_grid); y_max = min(self.grid_h, cy + h_grid)
+        x_min = max(0, cx - w_grid); x_max = min(self.grid_w, cx + w_grid)
+        self.grid[y_min:y_max, x_min:x_max] = VAL_FREE
