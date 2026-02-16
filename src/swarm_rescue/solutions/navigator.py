@@ -48,99 +48,78 @@ class Navigator:
             self.drone.initial_position = self.drone.estimated_pos
 
         self.cached_nearby_drones = nearby_drones
-
-        # [FIX] 1. Lấy dữ liệu Semantic TRƯỚC để lọc vị trí nạn nhân
         semantic_data = self.drone.semantic_values()
         nearby_victims = []
         if semantic_data:
             from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
             for data in semantic_data:
                 if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
-                    # Tính tọa độ Global của nạn nhân
                     angle_global = self.drone.estimated_angle + data.angle
                     vx = self.drone.estimated_pos[0] + data.distance * math.cos(angle_global)
                     vy = self.drone.estimated_pos[1] + data.distance * math.sin(angle_global)
                     nearby_victims.append(np.array([vx, vy]))
 
-        # [FIX] 2. Update Obstacle Map (Truyền thêm victims để lọc khỏi tường)
         lidar_data = self.drone.lidar_values()
         lidar_angles = self.drone.lidar_rays_angles()
         if lidar_data is not None:
-            self.obstacle_map.update_from_lidar(
-                self.drone.estimated_pos, 
-                self.drone.estimated_angle,
-                lidar_data, 
-                lidar_angles,
-                nearby_drones_pos=nearby_drones,
-                nearby_victims_pos=nearby_victims # <--- THAM SỐ MỚI
-            )
-            
-        # 3. Update Victim Map (Giữ nguyên)
-        self.victim_map.update_from_semantic(
-            self.drone.estimated_pos,
-            self.drone.estimated_angle,
-            semantic_data
-        )
+            self.obstacle_map.update_from_lidar(self.drone.estimated_pos, self.drone.estimated_angle, lidar_data, lidar_angles, nearby_drones_pos=nearby_drones, nearby_victims_pos=nearby_victims)
+        self.victim_map.update_from_semantic(self.drone.estimated_pos, self.drone.estimated_angle, semantic_data)
 
     def find_nearest_walkable(self, target_pos: np.ndarray, search_radius_grid: int = 10) -> Optional[np.ndarray]:
-        """
-        Tìm một điểm grid gần target_pos nhất mà có Cost thấp (đi được).
-        Dùng BFS để loang ra từ target.
-        """
         gx_t, gy_t = self.obstacle_map.world_to_grid(target_pos[0], target_pos[1])
-        
-        # Hàng đợi BFS: (gx, gy)
         queue = [(gx_t, gy_t)]
         visited = set([(gx_t, gy_t)])
-        
-        # Cost an toàn (tương đương cách tường ~30cm)
-        SAFE_COST = 100.0 
+        SAFE_COST = 400.0 # [TUNE] Chấp nhận điểm hơi nguy hiểm để thoát kẹt
         
         while queue:
             cx, cy = queue.pop(0)
-            
-            # Check xem ô này có an toàn không
             if 0 <= cx < self.obstacle_map.grid_w and 0 <= cy < self.obstacle_map.grid_h:
-                # Nếu cost thấp -> Đây là điểm gần nhất đi được!
                 if hasattr(self.obstacle_map, 'cost_map') and self.obstacle_map.cost_map[cy, cx] < SAFE_COST:
                     wx, wy = self.obstacle_map.grid_to_world(cx, cy)
                     return np.array([wx, wy])
-            
-            # Nếu chưa tìm thấy, loang ra các ô xung quanh
-            # Chỉ loang trong bán kính giới hạn để đỡ tốn CPU
-            if abs(cx - gx_t) > search_radius_grid or abs(cy - gy_t) > search_radius_grid:
-                continue
-
+            if abs(cx - gx_t) > search_radius_grid or abs(cy - gy_t) > search_radius_grid: continue
             for dx, dy in [(0,1), (0,-1), (1,0), (-1,0)]:
                 nx, ny = cx + dx, cy + dy
                 if (nx, ny) not in visited:
-                    visited.add((nx, ny))
-                    queue.append((nx, ny))
-                    
+                    visited.add((nx, ny)); queue.append((nx, ny))
         return None
+
+    def sanitize_target(self, target_pos: np.ndarray) -> Optional[np.ndarray]:
+        current_cost = self.obstacle_map.get_cost_at(target_pos)
+        # [TUNE] Cost < 400 là OK (Cách tường ~20cm)
+        if current_cost < 400.0: return target_pos
+        safe_pos = self.find_nearest_walkable(target_pos, search_radius_grid=20)
+        return safe_pos
+
+    def get_carrot_waypoint(self, path: List[np.ndarray], lookahead_dist: float = 80.0) -> np.ndarray:
+        if not path: return self.drone.estimated_pos
+        final_pt = path[-1]
+        dist_to_final = np.linalg.norm(self.drone.estimated_pos - final_pt)
+        if dist_to_final < lookahead_dist: return final_pt
+        best_carrot = path[0]
+        for wp in path:
+            if np.linalg.norm(self.drone.estimated_pos - wp) > lookahead_dist:
+                best_carrot = wp; break
+        return best_carrot
 
     def get_next_waypoint(self, final_target: np.ndarray, force_replan: bool = False) -> Optional[np.ndarray]:
         if final_target is None: return None
         
+        safe_target = self.sanitize_target(final_target)
+        if safe_target is None: return None
+        if np.linalg.norm(safe_target - final_target) > 1.0: final_target = safe_target
+        
         if self.failure_cooldown > 0:
             self.failure_cooldown -= 1
-            if self.current_astar_path: return self.current_astar_path[0]
+            if self.current_astar_path: return self.get_carrot_waypoint(self.current_astar_path)
             return None
 
-        # =========================================================
-        # 1. CHẾ ĐỘ VỀ NHÀ (Dijkstra Flow Field)
-        # =========================================================
         if self.drone.state in ['RETURNING', 'DROPPING', 'END_GAME']:
             self.dijkstra_update_timer += 1
-            
             should_update_map = False
-            # Update NGAY nếu chưa có map hoặc đích thay đổi xa
-            if self.dijkstra_target_cached is None or np.linalg.norm(final_target - self.dijkstra_target_cached) > 20.0:
-                should_update_map = True
-            # Update ĐỊNH KỲ
+            if self.dijkstra_target_cached is None or np.linalg.norm(final_target - self.dijkstra_target_cached) > 20.0: should_update_map = True
             elif self.dijkstra_update_timer > 40:
-                if (self.dijkstra_update_timer + self.drone.identifier * 5) % 10 == 0:
-                     should_update_map = True
+                if (self.dijkstra_update_timer + self.drone.identifier * 5) % 10 == 0: should_update_map = True
 
             if should_update_map:
                 self.obstacle_map.update_dijkstra_map(final_target)
@@ -148,20 +127,9 @@ class Navigator:
                 self.dijkstra_update_timer = 0
             
             raw_path = self.obstacle_map.get_dijkstra_path(self.drone.estimated_pos, max_steps=40)
-            
-            if len(raw_path) > 0:
-                self.current_astar_path = raw_path
-            else:
-                self.current_astar_path = []
-                # Nếu không tìm thấy đường về -> Đừng return None vội, có thể đang ở rất gần đích
-                # Hãy để logic smoothing bên dưới xử lý hoặc trôi theo quán tính
-                if np.linalg.norm(self.drone.estimated_pos - final_target) < 50:
-                    return final_target
-                return None
+            if len(raw_path) > 0: self.current_astar_path = raw_path
+            else: self.current_astar_path = []
 
-        # =========================================================
-        # 2. CHẾ ĐỘ KHÁM PHÁ (Cost-based A*)
-        # =========================================================
         else:
             self.replan_timer += 1
             need_replan = False
@@ -169,78 +137,58 @@ class Navigator:
             elif self.last_astar_target is None: need_replan = True
             elif np.linalg.norm(final_target - self.last_astar_target) > 30.0: need_replan = True
             elif len(self.current_astar_path) == 0: need_replan = True
-            elif self.replan_timer > 100: need_replan = True
+            elif self.replan_timer > 50: need_replan = True
 
             if need_replan:
                 self.replan_timer = 0
-                self.current_astar_path = self.obstacle_map.find_path_astar(
-                    self.drone.estimated_pos, 
-                    final_target
-                )
-
-                # [NEW] NẾU KHÔNG TÌM ĐƯỢC ĐƯỜNG (Do đích kẹt trong tường)
+                self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, final_target)
                 if not self.current_astar_path:
-                    # Hãy thử tìm một điểm "thoáng" gần đích nhất
-                    # print(f"[{self.drone.identifier}] ⚠️ Target unreachable. Searching nearest walkable...")
                     safe_target = self.find_nearest_walkable(final_target, search_radius_grid=15)
-                    
                     if safe_target is not None:
-                        # Thử tìm đường đến điểm an toàn đó
-                        self.current_astar_path = self.obstacle_map.find_path_astar(
-                            self.drone.estimated_pos, 
-                            safe_target
-                        )
-
+                        self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, safe_target)
                 self.last_astar_target = final_target.copy()
-                
-                if not self.current_astar_path:
-                    self.failure_cooldown = 30
-                    return None
+                if not self.current_astar_path: self.failure_cooldown = 30; return None
 
-        # =========================================================
-        # 3. LOC BỎ CÁC ĐIỂM QUÁ GẦN (QUAN TRỌNG ĐỂ TRÁNH DIST=0.0)
-        # =========================================================
-        # Loại bỏ các điểm đầu tiên nếu nó cách drone < 20cm
+        # [NEW LOGIC] ADAPTIVE PRUNING (Cắt bỏ điểm thừa)
+        # Mục tiêu: Nếu drone đã lướt qua điểm 1, 2 và đang ở gần điểm 3 -> Xóa 1, 2 đi.
+        if self.current_astar_path:
+            # Chỉ xét 20 điểm đầu tiên (Look window) để tránh nhận nhầm điểm ở đường song song bên kia tường
+            search_limit = min(len(self.current_astar_path), 20)
+            subset = self.current_astar_path[:search_limit]
+            
+            # Tìm chỉ số (index) của điểm gần drone nhất hiện tại
+            dists = [np.linalg.norm(self.drone.estimated_pos - wp) for wp in subset]
+            closest_idx = np.argmin(dists)
+            
+            # Cắt bỏ toàn bộ các điểm nằm trước điểm gần nhất
+            if closest_idx > 0:
+                self.current_astar_path = self.current_astar_path[closest_idx:]
+
+        # [LOGIC CŨ] Filter points too close (Giữ lại để dọn nốt điểm hiện tại nếu quá gần)
         while len(self.current_astar_path) > 0:
             if np.linalg.norm(self.drone.estimated_pos - self.current_astar_path[0]) < 20.0:
                 self.current_astar_path.pop(0)
-            else:
-                break
+            else: break
         
-        # Nếu sau khi lọc mà hết đường -> Nghĩa là đã đến rất gần đích
-        if not self.current_astar_path: 
-            return final_target
+        if not self.current_astar_path: return final_target
 
-        # =========================================================
-        # 4. SMOOTHING (Lookahead)
-        # =========================================================
-        LOOKAHEAD_DIST = 100.0 
-        if self.drone.state == 'RESCUING': LOOKAHEAD_DIST = 40.0
+        # [TUNE] CARROT
+        LOOKAHEAD = 80.0 
+        if self.drone.state == 'RESCUING': LOOKAHEAD = 40.0
         
-        check_radius = 2
-        # Khi Return: Map an toàn hơn, nhưng vẫn check kỹ để không đâm tường
-        if self.drone.state in ['RETURNING', 'DROPPING']: 
-            check_radius = 1 
+        carrot_wp = self.get_carrot_waypoint(self.current_astar_path, lookahead_dist=LOOKAHEAD)
         
-        best_wp = self.current_astar_path[0]
-        
-        # [FIX] Nếu điểm đầu tiên vẫn còn quá gần (<30cm) sau khi lọc -> Bắt buộc lấy điểm xa hơn
-        # bằng cách nới lỏng check_cost cho đoạn ngắn
-        
-        for i, wp in enumerate(self.current_astar_path):
-            dist = np.linalg.norm(self.drone.estimated_pos - wp)
-            if dist < LOOKAHEAD_DIST:
-                # Logic: Nếu điểm rất gần (<50cm), ta cho phép đi qua vùng Cost cao nhẹ (check_cost=False)
-                # để drone thoát ra khỏi chỗ chật hẹp. Nếu xa hơn thì phải an toàn (check_cost=True)
-                do_strict_check = True
-                if dist < 50.0 and i < 3: 
-                    do_strict_check = False # Nới lỏng kiểm tra cho vài điểm đầu tiên
+        # [FIX] check_cost=True để đảm bảo không cắt góc tường
+        # Cho phép đi qua vùng Cost < 300 (Hơi sát nhưng vẫn đi được nhờ Wall Repulsion của Pilot)
+        is_safe_line = self.obstacle_map.check_line_of_sight(
+            self.drone.estimated_pos, 
+            carrot_wp, 
+            safety_radius=1, # Giảm radius check xuống 1 để lọt khe hẹp
+            check_cost=True  # BẮT BUỘC CHECK COST
+        )
 
-                if self.obstacle_map.check_line_of_sight(self.drone.estimated_pos, wp, safety_radius=check_radius, check_cost=do_strict_check):
-                    best_wp = wp
-                else:
-                    break
-            else:
-                break
-        
-        return best_wp
+        if not is_safe_line:
+            # Nếu đường thẳng tới Cà rốt bị vướng, fallback về điểm gần nhất
+            return self.current_astar_path[0] 
+            
+        return carrot_wp
