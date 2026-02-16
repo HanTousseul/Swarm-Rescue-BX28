@@ -10,11 +10,13 @@ from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSeman
 try:
     from .navigator import Navigator
     from .pilot import Pilot
+    from .communicator import CommunicatorHandler
     from .victim_manager import VictimManager
 except ImportError:
     from navigator import Navigator
     from pilot import Pilot
     from victim_manager import VictimManager
+    from communicator import CommunicatorHandler
 
 class MyStatefulDrone(DroneAbstract):
     """
@@ -37,6 +39,7 @@ class MyStatefulDrone(DroneAbstract):
         # --- INITIALIZE COMPONENTS ---
         self.nav = Navigator(self)
         self.pilot = Pilot(self)
+        self.comms = CommunicatorHandler(self)
         self.victim_manager = VictimManager()
         
         # --- STATE VARIABLES ---
@@ -362,4 +365,6 @@ class MyStatefulDrone(DroneAbstract):
         return command
 
     def define_message_for_all(self):
-        pass
+        
+        comm_dict = self.comms.create_new_message()
+        return comm_dict

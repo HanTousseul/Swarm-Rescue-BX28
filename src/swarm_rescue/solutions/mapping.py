@@ -29,8 +29,10 @@ class GridMap:
         self.offset_x = self.map_width / 2.0
         self.offset_y = self.map_height / 2.0
         # The main grid: Positive values = Obstacles, Negative values = Free space
-        self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
-        
+        self.grid = np.zeros((self.grid_h, self.grid_w))
+        self.collaborative_map = np.zeros((self.grid_h, self.grid_w, 10))
+        self.collaborative_map_consolidated = np.zeros((self.grid_h, self.grid_w))
+
         self.cost_map = None
         self.dijkstra_grid = None
 
