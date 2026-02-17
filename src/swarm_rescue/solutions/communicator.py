@@ -18,6 +18,7 @@ class CommunicatorHandler:
         :param self: self
         '''
 
+        self.list_nearby_drones = []
         self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
         if self.drone.communicator_is_disabled(): return
 
@@ -29,6 +30,8 @@ class CommunicatorHandler:
             if sender_id == self.drone.identifier: continue 
 
             drone_id = content['id']
+
+            self.list_nearby_drones.append(content['position']) 
 
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
@@ -122,5 +125,3 @@ class CommunicatorHandler:
         }
 
         return return_dict
-    
-
