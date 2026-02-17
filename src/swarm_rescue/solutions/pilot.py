@@ -18,6 +18,67 @@ class Pilot:
         self.last_pos = None
         self.current_speed = 0.0
 
+    def _nearest_visible_wounded(self):
+        """Returns nearest currently visible non-grasped wounded person."""
+        semantic_data = self.drone.semantic_values()
+        if not semantic_data:
+            return None
+
+        nearest = None
+        best_dist = float("inf")
+        for data in semantic_data:
+            if data.entity_type != DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
+                continue
+            if data.grasped:
+                continue
+            if data.distance < best_dist:
+                best_dist = data.distance
+                nearest = data
+        return nearest
+
+    def front_grasp_alignment_command(self):
+        """
+        During RESCUING, rotate to face the wounded person first, then grasp.
+        """
+        if self.drone.grasped_wounded_persons():
+            return None
+        if self.drone.state != "RESCUING":
+            return None
+
+        wounded = self._nearest_visible_wounded()
+        if wounded is None:
+            return None
+
+        angle_error = normalize_angle(wounded.angle)
+        abs_error = abs(angle_error)
+
+        align_threshold = math.radians(10.0)
+        grasp_distance = 32.0
+
+        if abs_error > align_threshold:
+            return {
+                "forward": 0.0,
+                "lateral": 0.0,
+                "rotation": float(np.clip(3.0 * angle_error, -1.0, 1.0)),
+                "grasper": 0
+            }
+
+        if wounded.distance > grasp_distance:
+            approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
+            return {
+                "forward": approach_speed,
+                "lateral": 0.0,
+                "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+                "grasper": 0
+            }
+
+        return {
+            "forward": 0.06,
+            "lateral": 0.0,
+            "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+            "grasper": 1
+        }
+
     def calculate_repulsive_force(self):
         """Calculates repulsive force to avoid colliding with other drones."""
         total_lat = 0.0
@@ -156,11 +217,12 @@ class Pilot:
         if abs(angle_error) > 0.5 and not is_reversing:
             cmd_lateral += -0.5 * np.sign(angle_error)
 
-        # 7. Grasper Control (Relaxed)
-        # Allow grasping if Very Close (<15cm) OR (Close <25cm AND Angle < 60 degrees)
-        # This prevents the "deadlock" where it waits for perfect angle.
-        
-        grasper_val = 1 if (self.drone.grasped_wounded_persons() or (self.drone.state == "RESCUING" and dist_to_target < 60)) else 0
+        # 7. Front-approach grasp logic during rescue
+        front_grasp_cmd = self.front_grasp_alignment_command()
+        if front_grasp_cmd is not None:
+            return front_grasp_cmd
+
+        grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
 
         return {
