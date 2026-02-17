@@ -18,6 +18,8 @@ class CommunicatorHandler:
         :param self: self
         '''
 
+        self.list_nearby_drones = []
+        self.list_victims_taken_care_of = []
         self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
         if self.drone.communicator_is_disabled(): return
 
@@ -30,14 +32,20 @@ class CommunicatorHandler:
 
             drone_id = content['id']
 
+            self.list_nearby_drones.append(content['position'])
+
+            if content['victim_chosen'] is not None:
+                self.list_victims_taken_care_of.append(content['victim_chosen'])
+
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
 
-            for elt in content['victim_list']:
+            #for elt in content['victim_list']:
+#
+            #    if elt not in self.drone.victim_manager.registry:
+            #    
+            #       self.drone.victim_manager.registry.append(elt)  
 
-                if elt not in self.drone.victim_manager.registry:
-                
-                   self.drone.victim_manager.registry.append(elt)  
         self.consolidate_maps()
         return          
 
@@ -61,16 +69,14 @@ class CommunicatorHandler:
 
                     diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
 
-                    if obs_map[y][x] > 0:
+                    if obs_map[y][x] > 5:
 
                         if diff <= 0: continue
                         self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
 
-                    else:
+                    elif obs_map[y][x] < -1:
                         if diff >= 0: continue
                         self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
-
-                    self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
     
@@ -105,10 +111,10 @@ class CommunicatorHandler:
         '''
         if self.drone.state == 'EXPLORING':
 
-            victim = self.drone.best_victim_pos
+            victim = self.drone.current_target_best_victim_pos
         
         else: victim = None
-        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
+        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5 and self.drone.cnt_timestep > 300:
             obstacle_map = self.drone.nav.obstacle_map.grid  
         else: obstacle_map = None
         return_dict =   {'id' : self.drone.identifier,
@@ -122,5 +128,3 @@ class CommunicatorHandler:
         }
 
         return return_dict
-    
-
