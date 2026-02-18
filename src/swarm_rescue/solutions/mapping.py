@@ -5,30 +5,23 @@ import cv2
 from typing import List, Tuple, Optional
 
 # --- CONFIGURATION ---
-RESOLUTION = 8      # Size of one grid cell in cm
+RESOLUTION = 8     
 MAX_LIDAR_RANGE = 300 
-VAL_EMPTY = -0.5    # Lidar ray passed through (Free space)
-VAL_OBSTACLE = 2.0  # Lidar hit an obstacle
-VAL_FREE = -2.0     # Confirmed free space (Trajectory)
+VAL_EMPTY = -0.5    
+VAL_OBSTACLE = 2.0  
+VAL_FREE = -2.0     
 THRESHOLD_MIN = -50.0
 THRESHOLD_MAX = 50.0
 
 class GridMap:
-    """
-    Occupancy Grid Map representation of the world.
-    Handles lidar updates, cost map generation, pathfinding algorithms (A*, Dijkstra),
-    and frontier exploration logic.
-    """
     def __init__(self, map_size: Tuple[int, int], resolution: int = RESOLUTION):
         self.map_width = map_size[0]
         self.map_height = map_size[1]
         self.resolution = resolution
-        # Initialize grid dimensions
         self.grid_w = int(self.map_width / self.resolution) + 1
         self.grid_h = int(self.map_height / self.resolution) + 1
         self.offset_x = self.map_width / 2.0
         self.offset_y = self.map_height / 2.0
-        # The main grid: Positive values = Obstacles, Negative values = Free space
         self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
         
         self.cost_map = None
@@ -50,7 +43,7 @@ class GridMap:
         if lidar_data is None or lidar_angles is None: return
         cx, cy = self.world_to_grid(drone_pos[0], drone_pos[1])
         update_layer = np.zeros_like(self.grid)
-        step = 3 # Optimization: Process every 3rd ray
+        step = 3 
         
         DRONE_RADIUS_IGNORE = 40.0 
         VICTIM_RADIUS_IGNORE = 30.0 
@@ -60,19 +53,16 @@ class GridMap:
             angle = lidar_angles[i] + drone_angle 
             LIDAR_DIST_CLIP = 40.0
             
-            # Mark free space along the ray
             dist_empty = max(0.0, dist - LIDAR_DIST_CLIP)
             empty_x = drone_pos[0] + dist_empty * math.cos(angle)
             empty_y = drone_pos[1] + dist_empty * math.sin(angle)
             ex, ey = self.world_to_grid(empty_x, empty_y)
             cv2.line(update_layer, (cx, cy), (ex, ey), VAL_EMPTY, thickness=1)
             
-            # Mark obstacle at the end of the ray
             if dist < (MAX_LIDAR_RANGE - 5.0):
                 obs_x = drone_pos[0] + dist * math.cos(angle)
                 obs_y = drone_pos[1] + dist * math.sin(angle)
                 
-                # Check if this obstacle is actually a dynamic entity (Drone/Victim)
                 is_ignored = False
                 for d_pos in nearby_drones_pos:
                     if math.hypot(obs_x - d_pos[0], obs_y - d_pos[1]) < DRONE_RADIUS_IGNORE:
@@ -85,9 +75,9 @@ class GridMap:
                 ox, oy = self.world_to_grid(obs_x, obs_y)
                 if 0 <= ox < self.grid_w and 0 <= oy < self.grid_h:
                     if not is_ignored: update_layer[oy, ox] = VAL_OBSTACLE 
-                    else: update_layer[oy, ox] = VAL_FREE # Treat dynamic entities as free space
+                    else: update_layer[oy, ox] = VAL_FREE 
 
-        cv2.circle(update_layer, (cx, cy), 2, VAL_FREE, -1) # Clear space under the drone
+        cv2.circle(update_layer, (cx, cy), 2, VAL_FREE, -1) 
         self.grid += update_layer
         self.grid = np.clip(self.grid, THRESHOLD_MIN, THRESHOLD_MAX)
         self.update_cost_map()
@@ -109,7 +99,6 @@ class GridMap:
         self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
         SAFETY_WEIGHT = 300.0 
-        # Calculate cost: Inversely proportional to distance from obstacles
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
         ROBOT_RADIUS_GRID = 3.0 

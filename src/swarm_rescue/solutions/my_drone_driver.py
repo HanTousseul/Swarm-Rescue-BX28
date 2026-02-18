@@ -43,7 +43,6 @@ class MyStatefulDrone(DroneAbstract):
         self.rescue_center_pos = None 
         self.initial_position = None 
         self.cnt_timestep = 0
-        self.current_target_best_victim_pos = None
         
         self.last_rescue_pos = None
         self.drop_step = 0
@@ -107,10 +106,6 @@ class MyStatefulDrone(DroneAbstract):
                 current_path=self.nav.current_astar_path, 
                 window_name=f"Map - Drone {self.identifier}"
             )
-
-        # 4. Receive and process messages
-
-        self.comms.process_incoming_messages()
 
         # ================= STATE MACHINE =================
         if self.state == "DISPERSING":
@@ -341,7 +336,4 @@ class MyStatefulDrone(DroneAbstract):
         return command
 
     def define_message_for_all(self):
-        
-        return_dict = self.comms.create_new_message()
-        return return_dict
-        
+        pass
