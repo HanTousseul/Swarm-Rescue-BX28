@@ -1,53 +1,131 @@
 import numpy as np
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
+from .mapping import THRESHOLD_MIN, THRESHOLD_MAX
+
+MAPPING_REFRESH_RATE = 200 # in timesteps, time between updates to the map by the same drone
 
 class CommunicatorHandler:
     def __init__(self, drone):
         self.drone = drone
+        self.comm_counter = 0 
+        self.map_date_update = [0 for i in range (10)] #timestep of last map update given by a certain drone
+        self.list_wounded = []
 
-    # Đã xóa hàm should_wait_in_queue() để loại bỏ cơ chế xếp hàng
-
-    def is_target_taken_or_better_candidate(self, target_person_pos):
-        if target_person_pos is None: return False
-        if self.drone.communicator_is_disabled(): return False
+    def process_incoming_messages(self) -> None:
+        '''
+        Takes care of receiving messages, and assigning all interesting data to corresponding variables
         
-        my_dist = np.linalg.norm(self.drone.estimated_pos - target_person_pos)
-        COORDINATE_MATCH_THRESHOLD = 50.0 
+        :param self: self
+        '''
+
+        self.list_nearby_drones = []
+        self.list_victims_taken_care_of = []
+        self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
+        if self.drone.communicator_is_disabled(): return
 
         for msg_package in self.drone.communicator.received_messages:
             content = msg_package[1] if isinstance(msg_package, tuple) else msg_package
             if not isinstance(content, dict): continue
             
-            other_id = content.get("id")
-            other_state = content.get("state")
-            other_person_pos = content.get("person_pos")
-            other_current_pos = content.get("current_pos")
-            
-            if other_person_pos is None or other_current_pos is None: continue
-            
-            dist_between_targets = np.linalg.norm(target_person_pos - other_person_pos)
-            
-            # Nếu cùng nhắm vào một người
-            if dist_between_targets < COORDINATE_MATCH_THRESHOLD:
-                
-                other_dist_to_person = np.linalg.norm(other_current_pos - other_person_pos)
+            sender_id = content.get("id")
+            if sender_id == self.drone.identifier: continue 
 
-                # --- CASE 1: ĐỐI THỦ ĐÃ CHỐT KÈO (RETURNING/DROPPING) ---
-                if other_state in ["RETURNING", "DROPPING"]:
-                    return True 
+            drone_id = content['id']
 
-                # --- CASE 2: CẢ HAI CÙNG TRANH NHAU (RESCUING vs RESCUING) ---
-                # Hoặc EXPLORING vs RESCUING, EXPLORING vs EXPLORING
-                # Logic: So sánh khoảng cách và ID
-                
-                # Nếu đối thủ gần hơn mình đáng kể (> 20px) -> Nhường
-                if other_dist_to_person < my_dist - 20.0:
-                    return True
-                
-                # Nếu khoảng cách ngang nhau (trong phạm vi 20px) -> So ID
-                # Ai có ID nhỏ hơn thì được quyền ưu tiên (Luật bất thành văn để phá thế kẹt)
-                if abs(other_dist_to_person - my_dist) <= 20.0:
-                    if other_id < self.drone.identifier:
-                        return True
+            self.list_nearby_drones.append(content['position'])
 
-        return False
+            if content['victim_chosen'] is not None:
+                self.list_victims_taken_care_of.append(content['victim_chosen'])
+
+            if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
+                self.list_received_maps[drone_id] = content['obstacle_map']
+
+            #for elt in content['victim_list']:
+#
+            #    if elt not in self.drone.victim_manager.registry:
+            #    
+            #       self.drone.victim_manager.registry.append(elt)  
+
+        self.consolidate_maps()
+        return          
+
+    def consolidate_maps(self) -> None:
+
+        '''
+        This function will handle consolidating maps from other drones. Concretely, it will receive maps from nearby drones, make sure that we haven't received an update in a while and applies the update if necessary to the map.
+        
+        :param self: self
+        :return: None
+        :rtype: None
+        '''
+
+        for drone_id in range(10):
+
+            obs_map = self.list_received_maps[drone_id]
+            if obs_map is None:
+                continue
+            for y in range(len(obs_map)):
+                for x in range(len(obs_map[y])):
+
+                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
+
+                    if obs_map[y][x] > 5:
+
+                        if diff <= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+
+                    elif obs_map[y][x] < -1:
+                        if diff >= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+
+            self.map_date_update[drone_id] = self.drone.cnt_timestep
+        self.drone.nav.obstacle_map.update_cost_map()
+    
+
+    def priority(self) -> int: 
+        '''
+        Returns an integer giving the "priority" of a drone, the higher the integer, the more priority the drone gets. this helps resolve traffic jams. if a drone is carrying a wounded, it has the priority over non-carrying drones. in case of a tie, the drone with the highest identifier wins.
+        
+        :param self: self
+        :return: Priority value
+        :rtype: int
+        '''
+        
+        return self.drone.identifier + 100 if self.drone.grasped_wounded_persons() else self.drone.identifier        
+
+
+    def create_new_message(self) -> dict:
+        '''
+        This function handles the creation of the message to be communicated by the drone
+        we only send the map every 50 timestep to optimise the code further:
+        'id',
+        'position',
+        'state',
+        'obstacle_map' ,
+        'priority',
+        'victim_list',
+        'victim_chosen',
+        
+        :param self: self
+        :return: All information necessary to be communicated
+        :rtype: dict
+        '''
+        if self.drone.state == 'EXPLORING':
+
+            victim = self.drone.current_target_best_victim_pos
+        
+        else: victim = None
+        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5 and self.drone.cnt_timestep > 300:
+            obstacle_map = self.drone.nav.obstacle_map.grid  
+        else: obstacle_map = None
+        return_dict =   {'id' : self.drone.identifier,
+                        'position' : self.drone.estimated_pos,
+                        'state' : self.drone.state,
+                        'grasping' : True if self.drone.grasped_wounded_persons() else False,
+                        'obstacle_map' : obstacle_map,
+                        'priority': self.priority(),
+                        'victim_list': self.drone.victim_manager.registry,
+                        'victim_chosen': victim
+        }
+
+        return return_dict
