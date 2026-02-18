@@ -97,13 +97,17 @@ class VictimManager:
                 
         return True
 
-    def get_nearest_victim(self, drone_pos):
+    def get_nearest_victim(self, drone_pos, blacklist):
         """Returns the position of the nearest registered victim."""
         if not self.registry: return None
         closest_dist = float('inf')
         best_pos = None
         for record in self.registry:
-            if not self.is_victim_taken_care_of(record['pos']): continue
+            check = False
+            for bad in blacklist:
+                dist = np.linalg.norm(record['pos'] - bad)
+                if dist <= 20.0: check = True
+            if check: continue
             dist = np.linalg.norm(record['pos'] - drone_pos)
             if dist < closest_dist:
                 closest_dist = dist
