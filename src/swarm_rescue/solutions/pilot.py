@@ -18,6 +18,67 @@ class Pilot:
         self.last_pos = None
         self.current_speed = 0.0
 
+    def _nearest_visible_wounded(self):
+        """Returns nearest currently visible non-grasped wounded person."""
+        semantic_data = self.drone.semantic_values()
+        if not semantic_data:
+            return None
+
+        nearest = None
+        best_dist = float("inf")
+        for data in semantic_data:
+            if data.entity_type != DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
+                continue
+            if data.grasped:
+                continue
+            if data.distance < best_dist:
+                best_dist = data.distance
+                nearest = data
+        return nearest
+
+    def front_grasp_alignment_command(self):
+        """
+        During RESCUING, rotate to face the wounded person first, then grasp.
+        """
+        if self.drone.grasped_wounded_persons():
+            return None
+        if self.drone.state != "RESCUING":
+            return None
+
+        wounded = self._nearest_visible_wounded()
+        if wounded is None:
+            return None
+
+        angle_error = normalize_angle(wounded.angle)
+        abs_error = abs(angle_error)
+
+        align_threshold = math.radians(10.0)
+        grasp_distance = 32.0
+
+        if abs_error > align_threshold:
+            return {
+                "forward": 0.0,
+                "lateral": 0.0,
+                "rotation": float(np.clip(3.0 * angle_error, -1.0, 1.0)),
+                "grasper": 0
+            }
+
+        if wounded.distance > grasp_distance:
+            approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
+            return {
+                "forward": approach_speed,
+                "lateral": 0.0,
+                "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+                "grasper": 0
+            }
+
+        return {
+            "forward": 0.06,
+            "lateral": 0.0,
+            "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+            "grasper": 1
+        }
+
     def calculate_repulsive_force(self):
         """Calculates repulsive force to avoid colliding with other drones."""
         total_lat = 0.0
@@ -58,7 +119,7 @@ class Pilot:
             dist = lidar[i]
             if 10.0 < dist < ignore_dist:
                 if dist < min_dist_detected: min_dist_detected = dist
-                
+
                 force = K_wall / (dist ** 1.8)
                 force = min(1.0, force) 
 
@@ -90,7 +151,7 @@ class Pilot:
         target_angle = math.atan2(delta_y, delta_x)
 
         is_reversing = (self.drone.grasped_wounded_persons() and self.drone.state == 'RETURNING')
-        
+
         # State Checks
         is_final_approach = (self.drone.state == 'RESCUING' and dist_to_target < 55.0)
         is_aggressive = (self.drone.state == 'RESCUING') or (dist_to_target < 80.0)
@@ -101,14 +162,14 @@ class Pilot:
             desired_angle = target_angle
 
         angle_error = normalize_angle(desired_angle - self.drone.estimated_angle)
-        
+
         # =========================================================
         # 2. ROTATION CONTROL (VARIABLE KP STRATEGY)
         # =========================================================
-        
+
         # Default: Fast response for navigation
         KP_ROT = 4.0 
-        
+
         # [USER STRATEGY]: If close to target (< 70cm), reduce KP
         # This makes the drone turn softer/slower, avoiding oscillations/jitter close to the victim.
         if dist_to_target < 70.0:
@@ -126,10 +187,10 @@ class Pilot:
 
         # 4. Forward Speed Control
         MAX_SPEED = 0.9
-        
+
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
-        
+
         forward_cmd = MAX_SPEED * alignment_factor * wall_speed_factor
 
         # 5. Active Braking & Approach
@@ -138,7 +199,7 @@ class Pilot:
             # [CRITICAL]: Never allow speed to drop to 0.0 unless ON the target
             # Keep at least 0.15 to "nudge" closer or push through soft collisions.
             forward_cmd = max(0.15, dist_to_target * 0.03) 
-            
+
             # Apply alignment factor to slow down further if turning sharply
             forward_cmd *= alignment_factor
 

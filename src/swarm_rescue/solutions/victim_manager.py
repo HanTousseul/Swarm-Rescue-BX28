@@ -2,14 +2,17 @@ import numpy as np
 import math
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 
+SAFE_DISTANCE_FROM_OTHER_DRONE = 30.0 
+
 class VictimManager:
     """
     Manages the list of tracking victims.
     It handles identifying new victims, updating their positions, and filtering out 
     victims that are already being carried by other drones (Anti-Steal).
     """
-    def __init__(self):
+    def __init__(self, drone):
         # List of victims. Each record: {'id': str, 'pos': np.array, 'ts': int}
+        self.drone = drone
         self.registry = []
         self.next_id = 0
         self.merge_threshold = 80.0 # Distance threshold (cm) to consider two points as the same victim
@@ -48,7 +51,6 @@ class VictimManager:
         # 2. ANTI-STEAL LOGIC
         # Filter out victims that are physically too close to another drone.
         # Threshold: 30cm (Assumes if a victim is <30cm from a drone, it is being carried or rescued).
-        SAFE_DISTANCE_FROM_OTHER_DRONE = 30.0 
 
         for v_pos in observed_victims:
             is_being_carried = False
@@ -79,17 +81,29 @@ class VictimManager:
                     'ts': current_step
                 })
 
-    def get_nearest_victim(self, drone_pos, blacklist):
+    def is_victim_taken_care_of(self, position: tuple) -> bool: 
+        '''
+        Docstring for is_victim_taken_care_of
+        
+        :param self: Description
+        :param position: Description
+        :type position: tuple
+        :return: Description
+        :rtype: bool
+        '''
+        for elt in self.drone.comms.list_victims_taken_care_of:
+
+            if np.hypot(position[0] - elt[0], position[1] - elt[1]) < SAFE_DISTANCE_FROM_OTHER_DRONE: return False
+                
+        return True
+
+    def get_nearest_victim(self, drone_pos):
         """Returns the position of the nearest registered victim."""
         if not self.registry: return None
         closest_dist = float('inf')
         best_pos = None
         for record in self.registry:
-            check = False
-            for bad in blacklist:
-                dist = np.linalg.norm(record['pos'] - bad)
-                if dist <= 20.0: check = True
-            if check: continue
+            if not self.is_victim_taken_care_of(record['pos']): continue
             dist = np.linalg.norm(record['pos'] - drone_pos)
             if dist < closest_dist:
                 closest_dist = dist
