@@ -36,7 +36,6 @@ class CommunicatorHandler:
 
             if content['victim_chosen'] is not None:
                 self.list_victims_taken_care_of.append(content['victim_chosen'])
-            self.list_nearby_drones.append(content['position']) 
 
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
