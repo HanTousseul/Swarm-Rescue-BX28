@@ -336,4 +336,5 @@ class MyStatefulDrone(DroneAbstract):
         return command
 
     def define_message_for_all(self):
-        pass
+        return_dict = self.comms.create_new_message()
+        return return_dict
