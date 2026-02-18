@@ -58,25 +58,20 @@ class CommunicatorHandler:
         :return: None
         :rtype: None
         '''
-
+        OBSTACLE_THRESHOLD = 5.0
+        FREE_SPACE_THRESHOLD = -1.0
         for drone_id in range(10):
 
             obs_map = self.list_received_maps[drone_id]
             if obs_map is None:
                 continue
-            for y in range(len(obs_map)):
-                for x in range(len(obs_map[y])):
+            # Obstacle updates (received > current)
+            mask_obstacle = (obs_map > OBSTACLE_THRESHOLD) & (obs_map > self.drone.nav.obstacle_map.grid)
+            self.drone.nav.obstacle_map.grid[mask_obstacle] = obs_map[mask_obstacle]
 
-                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
-
-                    if obs_map[y][x] > 5:
-
-                        if diff <= 0: continue
-                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
-
-                    elif obs_map[y][x] < -1:
-                        if diff >= 0: continue
-                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+            # Free space updates (received < current, both negative)
+            mask_free = (obs_map < FREE_SPACE_THRESHOLD) & (obs_map < self.drone.nav.obstacle_map.grid)
+            self.drone.nav.obstacle_map.grid[mask_free] = obs_map[mask_free]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
     

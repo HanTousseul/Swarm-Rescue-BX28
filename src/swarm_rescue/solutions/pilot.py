@@ -132,6 +132,47 @@ class Pilot:
 
         return total_lat, speed_factor
 
+    def repulsive_force(self):
+
+        total_correction_norm = 0.7
+        repulsion_coeff = 20
+        total_rad_repulsion = 0
+        total_orthor_repulsion = 0
+
+        lidar_data = self.drone.lidar_values()
+        semantic_data = self.drone.semantic_values()
+        ray_angles = self.drone.lidar_rays_angles()
+
+        for elt in range (180):
+
+            if lidar_data[elt] < 220:
+
+                force = repulsion_coeff / lidar_data[elt] ** 2 
+                unit_vector_angle = ray_angles[elt] + math.pi
+
+                total_rad_repulsion += force * np.cos(unit_vector_angle)
+                total_orthor_repulsion += force *np.sin(unit_vector_angle)
+
+        for elt in semantic_data:
+
+            if (elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and self.drone.state == 'RESCUING') or (self.drone.state == 'RETURNING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER):
+
+                force = 20
+
+                total_rad_repulsion += force * np.cos(elt.angle)
+                total_orthor_repulsion += force *np.sin(elt.angle)
+
+        #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
+        #total_rad_repulsion = min(0.7, total_rad_repulsion)
+
+        actual_norm_correction = math.hypot(total_rad_repulsion,total_orthor_repulsion)
+        if actual_norm_correction < 0.1: return 0,0
+
+        total_rad_repulsion *= total_correction_norm / actual_norm_correction
+        total_orthor_repulsion *= total_correction_norm / actual_norm_correction
+
+        return (total_rad_repulsion, total_orthor_repulsion)
+
     def move_to_target_carrot(self) -> CommandsDict:
         """
         Main control loop.
