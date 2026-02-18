@@ -120,6 +120,9 @@ class GridMap:
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
         # Penalize Unknown areas slightly to encourage exploring free space
+        ROBOT_RADIUS_GRID = 3.0 
+        self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
+
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
         UNKNOWN_PENALTY = 100.0 
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
