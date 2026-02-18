@@ -1,555 +1,146 @@
 import math
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from swarm_rescue.simulation.utils.utils import normalize_angle
-from scipy.stats import circmean
 
-# Configuration from original file
-MAX_LIDAR_RANGE = 150   # Threshold to consider as "frontier"
-SAFE_DISTANCE = 30      # Safe distance (pixels) to avoid collisions
+try:
+    from .mapping import GridMap
+except ImportError:
+    from mapping import GridMap
 
 class Navigator:
+    """
+    Handles path planning and target processing.
+    Key Responsibilities:
+    1. Update internal map state via Sensor data.
+    2. Plan paths using A* (Exploration) or Dijkstra (Return/Rescue).
+    3. Calculate the "Carrot" waypoint for the Pilot to chase.
+    """
     def __init__(self, drone):
         self.drone = drone
-        
-        # --- MAPPER VARIABLES ---
-        self.edge = {}
-        self.visited_node = []
-        self.path_history = {}
-        self.waypoint_stack = [] # Stack to store return path
-        
-        # GPS/Odometer variables
         self.gps_last_known = None
         
-        self.tracked_drones = {}  # Store: {grid_key: [timestamp_history, position_history]}
-        self.counter = 0          # Simple step counter for time-stamping
+        map_size = getattr(self.drone, 'map_size', (100, 100))
+        self.obstacle_map = GridMap(map_size=map_size)
+        
+        self.current_astar_path = []
+        self.last_astar_target = None 
+        
+        # Tracks progress along the path to prevent backtracking
+        self.last_path_index = 0 
+        self.replan_timer = 0
+        self.failure_cooldown = 0 
+        self.cached_nearby_drones = []
+        self.dijkstra_update_timer = 0
+        self.dijkstra_target_cached = None
 
-    def update_navigator(self):
-        """Update estimated position from GPS or Odometer (Dead Reckoning)."""
+    def update_navigator(self, nearby_drones: List[np.ndarray] = []):
+        """Updates drone position estimation and mapping data."""
+        # 1. Update State (GPS/Compass/Odometer)
         gps_pos = self.drone.measured_gps_position()
         compass_angle = self.drone.measured_compass_angle()
-
         if gps_pos is not None and compass_angle is not None:
             self.drone.estimated_pos = gps_pos
             self.drone.estimated_angle = compass_angle
-            self.gps_last_known = gps_pos
         else:
-            # GPS Lost -> Use Odometer accumulation
-            odom = self.drone.odometer_values() # [dist, alpha, theta]
+            odom = self.drone.odometer_values()
             if odom is not None:
                 dist, alpha, theta = odom[0], odom[1], odom[2]
                 move_angle = self.drone.estimated_angle + alpha
                 self.drone.estimated_pos[0] += dist * math.cos(move_angle)
                 self.drone.estimated_pos[1] += dist * math.sin(move_angle)
                 self.drone.estimated_angle = normalize_angle(self.drone.estimated_angle + theta)
-                
+        
         if self.drone.initial_position is None: 
             self.drone.initial_position = self.drone.estimated_pos
-
-    def availability_gps(self):
-        gps_pos = self.drone.measured_gps_position()
-        compass_angle = self.drone.measured_compass_angle()
-        return gps_pos is not None or compass_angle is not None
-
-    def lidar_possible_paths(self) -> List:
-        '''
-        Collect Lidar data, analyze and return a list of potential areas (Frontiers), sorted from the position highest
-        to lowest difference between the actual angle of the drone (to get the minimum angle difference, take the last one),
-        and the required angle to get to the potential area. 
-        Returns None if there is no self.estimated_pos
-        '''
+        
+        # 2. Update Map
         lidar_data = self.drone.lidar_values()
-        ray_angles = self.drone.lidar_rays_angles()
-        lidar_possible_angles = [] #Allows us to sort the possible paths by absolute value of angle
-        minimal_distance_coefficient = 1.2 #coefficient by which we multiply the average length of lidar rays to find the minimal distance
-        minimal_distance = min(np.mean(np.array(lidar_data)) * minimal_distance_coefficient, 190) #Distance above which the ray is considered not to hit an obstacle anymore. min 190 because semantic sensor rays have range 200, we choose a value slightly smaller
-        step_forward = 132 #Distance that the drone will move forward from his actual position towards the possible path it chose
-        angle_ignore=0 #angle centered in Pi that the drone will not consider as a possible path. Prevents the drone from counting as a possible path the path from where it came from
-        edge_length=0.7 #The difference of length of two consecutive rays to consider as an opening in the wall. Given as multiple of the length of the bigger ray
-        Same_possible_path = 50 #Maximum distance between two possible paths for them to be considered as the same 
-        already_visited_path = 75 #Distance above which a new possible path will be considered valid if its distance with an already visited path is greather than already visited path
-        rescuing_bool:bool = self.drone.state == 'RESCUING'
-
-        coords = self.drone.estimated_pos
-        angle = self.drone.estimated_angle
-    
-        if coords is None: return [] # Avoid crash if GPS is lost and estimated_pos is not set (which should not happen)
-
-        begin_loop = False # if the last consecutive rays hit a wall
-        end_of_loop = False # if the first consecutive rays hit a wall
-        min_ray = 0,False
-        max_ray = 180, False
-        edge_begin = None
-        edge_end = None
-        extra_rays = 20 # we take the new possible path of an edge as the middle of extra rays after the edge
-        correct_position_nb_rays:int = 5 #(used in correct position helper function) number of rays sweeped centered around the possible path that are checked for minimum length 
-
-
-        #print('position', coords, angle)
-        def is_visited(position: Tuple) -> bool:
-            '''
-            function that returns True if the position is worth adding to list_possible_paths, False otherwise
-            checks for proximity with visited nodes, current position and all possible paths
-                        
-            :param position: (x,y) coordinates of the new possible path considered
-            :type position: Tuple
-            :return: whether or not the position is worth adding to the list
-            :rtype: bool            
-            '''
-            visited = False
-            for elt in self.visited_node:
-
-                node = np.array(elt)
-
-                if not visited and np.linalg.norm(position-node)<already_visited_path:
-                    visited = True
-
-            if not(visited):
-
-                for elt in lidar_possible_angles:
-                    node = np.array(elt[0])
-                    
-                    if not(visited) and np.linalg.norm(position-node)<Same_possible_path:
-                        visited = True
-
-            if not(visited):
-
-                if np.linalg.norm(position-coords)<Same_possible_path:
-                    visited = True
-            return visited
-
-        def correct_position(mean_angle:float) -> Tuple:
-            '''
-            Takes in a new possible path candidate, makes sure that there isn't a wall between it and the drone, and corrects it if so
-            
-            :param mean_angle: float of the angle of this new position
-            :type mean_angle: float
-            :return: ((x,y),mean_angle) corrected new possible path
-            :rtype: Tuple
-            '''
-            min_dist: float = step_forward
-            index: int = (round(np.rad2deg(mean_angle)) // 2 + 90) % 180
-            is_first_index: bool = False
-            #print('correct_position_call', mean_angle)
-            for ray in range(index - correct_position_nb_rays, index + correct_position_nb_rays + 1):
-
-                if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
-
-                    #print('first_needs_correction',ray, lidar_data[ray % 180])
-                    min_dist = lidar_data[ray % 180] - SAFE_DISTANCE
-                    if not(is_first_index):
-
-                        is_first_index = True
-                        first_index = ray
-                        last_index = ray
-
-                    else:
-                        last_index = ray
-
-
-            #print('needs correction?', is_first_index, min_dist)
-            if not(is_first_index): return None
-
-            if first_index == index - correct_position_nb_rays and last_index == index + correct_position_nb_rays + 1: 
-                #print('needs correction? No')
-                return coords
-            
-            #print('it does need correction', index, first_index, last_index)
-            continuity: bool = True
-
-            for ray in range(first_index, last_index):
-
-                if lidar_data[ray % 180] > step_forward + SAFE_DISTANCE:
-                    continuity = False
-
-            if continuity:
-
-                if first_index > index or (last_index > index and abs(first_index - index) <= abs(index - last_index)):
-
-                    interval_correction = first_index - 10, first_index
-
-                else:
-
-                    interval_correction = last_index + 1, last_index + 11
-
-                interval_correction_continuity: bool = True
-            
-                for ray in range(interval_correction[0], interval_correction[1]):
-
-                    if lidar_data[ray % 180] < step_forward + SAFE_DISTANCE:
-                        #print(ray, lidar_data[ray % 180])
-                        interval_correction_continuity = False
-
-            if not(continuity) or not(interval_correction_continuity): 
-
-                new_pos = np.array((float(coords[0] + min_dist*np.cos(mean_angle)), 
-                                    float(coords[1] + min_dist*np.sin(mean_angle))))
-                #print('new_if', continuity, first_index, last_index, new_pos, mean_angle)
-                return (new_pos, mean_angle)
-
-            else:
-
-                #print('aaaaaaaaaaaaaaaaaaaaaaaaaa',
-                #    (interval_correction[0], ray_angles[interval_correction[0]]),
-                #    (interval_correction[1], ray_angles[interval_correction[1]]),
-                #    step_forward)
-                computed_position = compute_position(
-                    (interval_correction[0], ray_angles[interval_correction[0] % 180]),
-                    (interval_correction[1], ray_angles[interval_correction[1] % 180]),
-                    step_forward = step_forward
-                    )
-                
-                new_pos = computed_position[0], computed_position[1]
-                new_mean_angle = computed_position[2]
-                
-                #print('new_else', continuity, interval_correction, interval_correction_continuity, first_index, last_index, new_pos, new_mean_angle)
-                return(new_pos, new_mean_angle)
-
-        def compute_position(Ray1:Tuple, Ray2:Tuple, step_forward: float) -> Tuple:
-            '''
-            Takes in two rays and outputs the position of the node to be added as well as the mean angle of the two rays.
-            
-            :param Ray1: The first ray of the position
-            :type Ray1: Tuple (index, ray_angle[index])
-            :param Ray2: The last ray of the position
-            :type Ray2: Tuple (index, ray_angle[index])
-            :param step_forward: distance between the drone and the new possible path
-            :type step_forward: float
-            '''
-            mean_angle = normalize_angle(circmean((Ray1[1], Ray2[1])))
-            #print('mean_angle', mean_angle, Ray1, Ray2)
-            Trueangle = mean_angle + angle
-
-
-            return (float((coords[0] + step_forward * np.cos(Trueangle))), 
-                    float(coords[1] + step_forward * np.sin(Trueangle)), 
-                    mean_angle
-                    )    
-
-        def add_to_lidar_possible_angles(position_mean_angle: Tuple) -> None:
-            '''
-            Takes as argument compute position for 2 rays, and inserts the corresponding position in lidar_possible_angle if the node is not yet visited, while sorting the list in decreasing difference between angle of the drone and angle of the position
-            
-            :param position_mean_angle: Tuple of the form (coords[0], coords[1], mean_angle)
-            :type position_mean_angle: Tuple
-            '''
-            visited:bool = False #if the node has been visited or not
-            position:tuple = (position_mean_angle[0], position_mean_angle[1])
-            mean_angle:float = position_mean_angle[2]
-
-            if not(rescuing_bool): 
-                visited = is_visited(position)
-
-            else: visited = True
-
-            if visited: return # we stop if path is already visited
-
-            #print('sending candidate to correct', position, mean_angle)
-            # correction refers to setting the node closer to the drone in case it is hidden by a wall for some reason
-            needs_correction = correct_position(mean_angle) 
-            #print('position, needs correction',position, needs_correction)
-            if needs_correction:
-
-                position = needs_correction[0] # we correct if needed
-                if not(rescuing_bool):
-                    visited = is_visited(position)
-                else: visited = True
-                #print('Needs corrcetion, is visited?', visited)
-                if visited: return # if the corrected path is not worth adding
-
-            # if the path is new (theoretically)
-            inserted = False
-            # Sort the angles in decreasing absolute value of angle order
-            if len(lidar_possible_angles)>0:
-                rank = 0
-                while rank < len(lidar_possible_angles) and abs(lidar_possible_angles[rank][1]) < abs(mean_angle):
-                    rank+=1
-
-                if rank != len(lidar_possible_angles):
-
-                    inserted = True
-                    lidar_possible_angles.insert(rank, (position,mean_angle))
-
-            if not inserted :
-
-                lidar_possible_angles.append((position, mean_angle))
-
-            #print('computed', (position,mean_angle))
-            return
-
-        #In case there is nothing directly in front of the drone
-        boolean = True
-        for index in range(85,96):
-            if lidar_data[index] < minimal_distance: 
-                boolean = False
-        if boolean:
-            Ray1 = 85, ray_angles[85]
-            Ray2 = 95, ray_angles[95]
-            computed = compute_position(Ray1, Ray2, step_forward)
-            add_to_lidar_possible_angles(computed)
-
-        for index in range(round(angle_ignore/2), 181 - round(angle_ignore/2) -1):
-
-            if lidar_data[index] < minimal_distance and lidar_data[index+1] > minimal_distance:
-                
-                min_ray = index+1, ray_angles[index+1]
-                #print('min_ray', min_ray)
-            elif lidar_data[index] > minimal_distance and lidar_data[index+1] < minimal_distance:
-
-                max_ray = index, ray_angles[index]
-                #print('max_ray', max_ray)
-                if min_ray == (0,False):
-
-                    end_of_loop = max_ray # if the "hole" that the drone is seeing with its first lidar ray starts in the zone he's not looking in
-                elif min_ray[0]+4<max_ray[0]: # only add possible path if a couple of consecutive rays 'see' it
-                    #print('call1')
-                    #print('min_ray,max_ray', min_ray,max_ray)
-                    computed = compute_position(min_ray,max_ray,step_forward)
-                    add_to_lidar_possible_angles(computed)
-            
-            if lidar_data[index+1]*edge_length > lidar_data[index]: #imagine a little room with a door flush in a wall. Might not be deep but we can use the fact that there will be two consecutive rays with a big gap
-                edge_begin = index+1, ray_angles[index+1]
-                #print('edge_begin', edge_begin)
-
-            elif lidar_data[index+1] < lidar_data[index] * edge_length:
-                 
-                edge_end = index, ray_angles[index]
-                #print('edge_end',edge_end)
-                if edge_begin != None: 
-
-                    #print('call2, edge_begin and edge_end', edge_begin, edge_end)
-                    computed = compute_position(edge_begin,edge_end,step_forward)
-                    #print('computed',computed)
-                    add_to_lidar_possible_angles(computed)
-
-                    edge_begin = None
-                    edge_end = None
-
-            if edge_begin != None:
-
-                if index > edge_begin[0]+22: # if 45 degrees have passed and we still haven't found an edge_end
-
-                    edge_end = edge_begin[0] + extra_rays, ray_angles[edge_begin[0]+extra_rays]
-                    #print('call2, edge_begin')
-                    computed = compute_position(edge_begin,edge_end,step_forward)
-                    #print('computed',computed)
-                    add_to_lidar_possible_angles(computed)
-
-                    edge_begin = None
-                    edge_end = None
-
-            elif edge_end != None: # we found an edge_end but no edge_begin, we set edge_begin to be the 10th ray before edge_end.
-                edge_begin = (edge_end[0]-extra_rays) % 181, ray_angles[(edge_end[0]-extra_rays) % 181]
-            
-                #print('call2, edge_end')
-                computed = compute_position(edge_begin,edge_end,step_forward)
-                add_to_lidar_possible_angles(computed)
-
-                edge_begin = None
-                edge_end = None                
-
-        if min_ray!= (0,False) and max_ray[0]<min_ray[0]:
-
-            begin_loop=min_ray
-
-        # we now take care of the begin and end loops
-        if begin_loop != False and end_of_loop != False:
-            
-            end_of_loop_bool = False
-            index = begin_loop[0]
-
-
-
-            while index - 180 < end_of_loop[0] and not(end_of_loop_bool) and(lidar_data[index % 180] > minimal_distance):
-
-                index +=1
-
-                if index % 180 == end_of_loop[0]:
-
-                    end_of_loop_bool = True
-
-            #print('call3')
-            #print('end_of_loop', end_of_loop)
-            #print('call3 param', begin_loop, (index, ray_angles[index%180]))
-            computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            add_to_lidar_possible_angles(computed)
-
-            if not(end_of_loop_bool):
-
-                index = end_of_loop[0]
-
-                while index + 180 > begin_loop[0] and lidar_data[index % 180] > minimal_distance:
-
-                    index += 1
-
-                #print('call4')
-                #print('call4 params',(index % 180, ray_angles[index % 180]), end_of_loop )
-                computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-                add_to_lidar_possible_angles(computed)
-
-        elif begin_loop != False and end_of_loop == False:
-
-            index = begin_loop[0]
-
-            while index < 180 + round(angle_ignore/2) and lidar_data[index % 180] > minimal_distance:
-
-                index +=1
-
-            #print('call5')
-            #print(begin_loop, (index, ray_angles[index % 180]))
-            computed=compute_position(begin_loop, (index, ray_angles[index % 180]), step_forward)
-            add_to_lidar_possible_angles(computed)
-
-        elif begin_loop == False and end_of_loop != False:
-
-            index = end_of_loop[0]
-
-            while index > - round(angle_ignore/2) and lidar_data[index % 180] > minimal_distance:
-
-                index -=1
-
-            index+=1
-            #print('call6')
-            computed=compute_position((index % 180, ray_angles[index % 180]), end_of_loop, step_forward)
-            add_to_lidar_possible_angles(computed)
-        
-        lidar_possible_paths = [tuple((a[0],a[1])) for a in lidar_possible_angles ]
-        #print('list',lidar_possible_angles)
-        #print(lidar_possible_angles)
-        lidar_possible_angles.reverse()
-        
-        if self.drone.state == 'RESCUING': 
-            print(coords, lidar_possible_angles)
-        return lidar_possible_angles
-
-    def update_mapper(self):
-        """Build a map of visited points (Graph Building)."""
-        list_possible_area = self.lidar_possible_paths()
-        # Use Int Key to avoid float precision errors
-        pos_key = (int(self.drone.estimated_pos[0]), int(self.drone.estimated_pos[1]))
-        
-        if pos_key not in self.edge:
-            self.edge[pos_key] = [] 
-            
-        for val in list_possible_area:
-            x = val[0][0]
-            y = val[0][1]
-            visited = False
-            for node in self.visited_node:
-                if math.hypot(x - node[0], y - node[1]) < 70.0:
-                    visited = True
-                    break
-            if not visited: 
-                self.edge[pos_key].append((x,y))
-
-    def visit(self, pos):
-        if pos is not None:
-            pos_key = tuple(pos) if isinstance(pos, np.ndarray) else pos
-            if pos_key not in self.visited_node: 
-                self.visited_node.append(pos_key)
-
-    def is_path_blocked(self, target_pos, safety_margin=20):
-        """
-        Check if the straight line from current position to target_pos is blocked.
-        """
-        if target_pos is None: return False
-
-        rel_pos = target_pos - self.drone.estimated_pos
-        dist = np.linalg.norm(rel_pos)
-        target_angle = math.atan2(rel_pos[1], rel_pos[0])
-        
-        angle_diff = normalize_angle(target_angle - self.drone.estimated_angle)
-        
-        lidar_data = self.drone.lidar_values()
-        ray_angles = self.drone.lidar_rays_angles()
-
-        if lidar_data is None or ray_angles is None:
-            return False
-        
-        min_diff = float('inf')
-        closest_ray_idx = -1
-        
-        for i, ray_angle in enumerate(ray_angles):
-            diff = abs(normalize_angle(ray_angle - angle_diff))
-            if diff < min_diff:
-                min_diff = diff
-                closest_ray_idx = i
-                
-        if closest_ray_idx != -1:
-            measured_dist = lidar_data[closest_ray_idx]
-            if measured_dist < (dist - safety_margin): 
-                return True
-                
-        return False
-    
-    def find_best_bypass(self, original_target):
-        """
-        Find an intermediate point (frontier) that is closest in direction to original_target.
-        """
-        possible_nodes = self.lidar_possible_paths()
-        if not possible_nodes:
-            return None
-            
-        rel_pos = original_target - self.drone.estimated_pos
-        target_angle = math.atan2(rel_pos[1], rel_pos[0])
-        
-        best_node = None
-        min_angle_diff = float('inf')
-        
-        for node_info in possible_nodes:
-            node_pos = np.array(node_info[0])
-            node_rel = node_pos - self.drone.estimated_pos
-            node_angle = math.atan2(node_rel[1], node_rel[0])
-            
-            diff = abs(normalize_angle(node_angle - target_angle))
-            
-            if diff < min_angle_diff:
-                min_angle_diff = diff
-                best_node = node_pos
-                
-        return best_node
-
-    def find_shortcut_target(self):
-        """
-        Find the furthest ancestor that the drone can fly straight to (without wall blocking).
-        Helps the drone return home faster instead of step-by-step.
-        """
-        if self.drone.current_target is None: return None
-        
-        # 1. Retrieve Ancestors Chain
-        # Look back max 8 steps to save computation
-        ancestors = []
-        curr_key = (int(self.drone.current_target[0]), int(self.drone.current_target[1]))
-        
-        temp_key = curr_key
-        for _ in range(8):
-            if temp_key in self.path_history:
-                parent_pos = self.path_history[temp_key]
-                ancestors.append(parent_pos)
-                temp_key = (int(parent_pos[0]), int(parent_pos[1]))
-            else:
-                break
-        
-        if not ancestors: return None
-
-        # 2. Greedy Check (Furthest to Nearest)
-        for target_pos in reversed(ancestors):
-            # Distance check: If too far (> 300px), Lidar can't verify wall
-            dist = np.linalg.norm(target_pos - self.drone.estimated_pos)
-            if dist > 300.0: continue 
-
-            # Check wall block
-            # Note: Need larger safety_margin (30px) for shortcuts
-            if not self.is_path_blocked(target_pos, safety_margin=30):
-                return target_pos
-                
+        lidar_angles = self.drone.lidar_rays_angles()
+        if lidar_data is not None:
+            self.obstacle_map.update_from_lidar(self.drone.estimated_pos, self.drone.estimated_angle, lidar_data, lidar_angles)
+
+    def find_nearest_walkable(self, target_pos: np.ndarray, search_radius_grid: int = 10) -> Optional[np.ndarray]:
+        """BFS search to find the nearest valid walkable point if the target is inside a wall."""
+        gx_t, gy_t = self.obstacle_map.world_to_grid(target_pos[0], target_pos[1])
+        queue = [(gx_t, gy_t)]; visited = set([(gx_t, gy_t)]); SAFE_COST = 200.0 
+        while queue:
+            cx, cy = queue.pop(0)
+            if 0 <= cx < self.obstacle_map.grid_w and 0 <= cy < self.obstacle_map.grid_h:
+                if hasattr(self.obstacle_map, 'cost_map') and self.obstacle_map.cost_map[cy, cx] < SAFE_COST:
+                    wx, wy = self.obstacle_map.grid_to_world(cx, cy)
+                    return np.array([wx, wy])
+            if abs(cx - gx_t) > search_radius_grid or abs(cy - gy_t) > search_radius_grid: continue
+            for dx, dy in [(0,1), (0,-1), (1,0), (-1,0)]:
+                nx, ny = cx + dx, cy + dy
+                if (nx, ny) not in visited:
+                    visited.add((nx, ny)); queue.append((nx, ny))
         return None
-    def get_stationary_drone_threats(self) -> List[float]:
+
+    def sanitize_target(self, target_pos: np.ndarray) -> Optional[np.ndarray]:
+        """Ensures the target is safe. If in a high-cost area, moves it to a safe neighbor."""
+        current_cost = self.obstacle_map.get_cost_at(target_pos)
+        if current_cost < 400.0: return target_pos
+        safe_pos = self.find_nearest_walkable(target_pos, search_radius_grid=20)
+        return safe_pos
+
+    def get_carrot_waypoint(self, path: List[np.ndarray], lookahead_dist: float = 80.0) -> np.ndarray:
         """
-        Scans semantic sensor and returns relative angles of drones 
-        deemed stationary and too close.
+        Calculates the 'Carrot' point for the Pilot to chase using Pure Pursuit logic.
+        Uses `last_path_index` to prevent the drone from turning back to previous points.
         """
-        self.counter += 1
+        if not path: return self.drone.estimated_pos
+        
+        # Optimization: Only search for the closest point starting from the last known index.
+        # This prevents the drone from locking onto a point behind it in a U-turn scenario.
+        search_range = 20
+        start_idx = self.last_path_index
+        end_idx = min(len(path), start_idx + search_range)
+        
+        closest_dist = float('inf')
+        current_closest_idx = start_idx
+
+        # 1. Find closest point on path
+        for i in range(start_idx, end_idx):
+            dist = np.linalg.norm(self.drone.estimated_pos - path[i])
+            if dist < closest_dist:
+                closest_dist = dist
+                current_closest_idx = i
+        
+        # Update progress
+        self.last_path_index = current_closest_idx
+
+        # 2. Find the carrot (first point outside the lookahead radius)
+        best_carrot = path[-1]
+        for i in range(current_closest_idx, len(path)):
+            d_to_carrot = np.linalg.norm(self.drone.estimated_pos - path[i])
+            if d_to_carrot > lookahead_dist:
+                best_carrot = path[i]
+                break
+                
+        return best_carrot
+    
+    def get_adaptive_lookahead(self) -> float:
+        """
+        Dynamically adjusts lookahead distance based on environmental clutter.
+        - Open space: Long lookahead (Fast, smooth).
+        - Cluttered/Narrow space: Short lookahead (Precision, cornering).
+        """
+        current_cost = self.obstacle_map.get_cost_at(self.drone.estimated_pos)
+        
+        if current_cost < 10.0: 
+            return 110.0 # Open space
+        elif current_cost > 100.0:
+            return 40.0  # Tight space
+        else:
+            return 110.0 - (current_cost / 100.0) * 70.0 # Linear interpolation
+        
+    def get_stationary_drone_coordinates(self) -> List[np.ndarray]:
+        """
+        Scans semantic sensor and returns global coordinates (x, y) of drones 
+        deemed stationary.
+        """
+        self.counter += 1 # Step counter for a drone until it is considered stationary
         semantic_data = self.drone.measured_semantic()
         curr_pos = self.drone.estimated_pos
         curr_angle = self.drone.estimated_angle
@@ -559,10 +150,11 @@ class Navigator:
         TIME_WINDOW = 20        # Frames to observe
         SAFE_AVOID_DIST = 55    # Distance to trigger avoidance
         
-        stationary_angles = []
+        stationary_coords = [] # Changed from stationary_angles
         
         for data in semantic_data:
-            if data.entity_type == "Drone":
+            # Check if entity type matches "Drone"
+            if data.entity_type == "Drone" or str(data.entity_type) == "DRONE": 
                 # Project relative sensor data to global map coordinates
                 abs_angle = normalize_angle(curr_angle + data.angle)
                 glob_x = curr_pos[0] + data.distance * math.cos(abs_angle)
@@ -580,42 +172,100 @@ class Navigator:
                 if len(self.tracked_drones[grid_key]) > TIME_WINDOW:
                     self.tracked_drones[grid_key].pop(0)
                     
-                    # Logic: Is the drone stationary?
-                    # Compare oldest vs newest position in our memory window
+                    # Finding distance moved by the drone
                     hist = self.tracked_drones[grid_key]
                     first_pos = np.array(hist[0][1])
                     last_pos = np.array(hist[-1][1])
                     dist_moved = np.linalg.norm(last_pos - first_pos)
                     
-                    # If it hasn't moved much and is currently close to us
+                    # Comparison
                     if dist_moved < STILL_THRESHOLD and data.distance < SAFE_AVOID_DIST:
-                        stationary_angles.append(data.angle)
+                        # Return the current global coordinates of this threat
+                        stationary_coords.append(np.array([glob_x, glob_y])) 
     
-        # Memory Cleanup: Remove entries not seen in the last 50 steps
+        # Remove entries not seen in the last 50 steps
         if self.counter % 100 == 0:
             self.tracked_drones = {k: v for k, v in self.tracked_drones.items() 
                                    if self.counter - v[-1][0] < 50}
                 
-        return stationary_angles
-    def avoid_stationary_drones(self, forward, lateral, rotation):
+        return stationary_coords
+
+    def get_next_waypoint(self, final_target: np.ndarray, force_replan: bool = False) -> Optional[np.ndarray]:
         """
-        Modifies movement commands to steer away from spotted stationary drones.
+        Main navigation loop. Handles Path Planning (A*/Dijkstra) and Waypoint Selection (Carrot).
         """
-        threat_angles = self.get_stationary_drone_threats()
+        if final_target is None: return None
         
-        if not threat_angles:
-            return forward, lateral, rotation
-    
-        # Calculate average threat direction
-        avg_threat = sum(threat_angles) / len(threat_angles)
+        # 1. Sanitize Target
+        safe_target = self.sanitize_target(final_target)
+        if safe_target is None: return None
+        if np.linalg.norm(safe_target - final_target) > 1.0: final_target = safe_target
         
-        # Steering Logic:
-        # If drone is ahead-left, steer right. If ahead-right, steer left.
-        avoid_rot = -1.0 if avg_threat > 0 else 1.0
+        # 2. Cooldown check (if pathfinding failed recently)
+        if self.failure_cooldown > 0:
+            self.failure_cooldown -= 1
+            if self.current_astar_path: return self.get_carrot_waypoint(self.current_astar_path)
+            return None
+
+        # 3. Path Planning Logic
+        # CASE A: DIJKSTRA (Returning/Dropping) - Uses Gradient Descent on Cost Map
+        if self.drone.state in ['RETURNING', 'DROPPING', 'END_GAME']:
+            self.dijkstra_update_timer += 1
+            should_update_map = False
+            if self.dijkstra_target_cached is None or np.linalg.norm(final_target - self.dijkstra_target_cached) > 20.0: should_update_map = True
+            elif self.dijkstra_update_timer > 40: should_update_map = True
+
+            if should_update_map:
+                self.obstacle_map.update_dijkstra_map(final_target)
+                self.dijkstra_target_cached = final_target.copy()
+                self.dijkstra_update_timer = 0
+            
+            raw_path = self.obstacle_map.get_dijkstra_path(self.drone.estimated_pos, max_steps=40)
+            if len(raw_path) > 0: 
+                self.current_astar_path = raw_path
+                self.last_path_index = 0 # Reset index
+            else: self.current_astar_path = []
+
+        # CASE B: A* STAR (Exploring)
+        else: 
+            self.replan_timer += 1
+            need_replan = False
+            if force_replan: need_replan = True
+            elif self.last_astar_target is None: need_replan = True
+            elif np.linalg.norm(final_target - self.last_astar_target) > 30.0: need_replan = True
+            elif len(self.current_astar_path) == 0: need_replan = True
+            elif self.replan_timer > 50: need_replan = True
+
+            if need_replan:
+                self.replan_timer = 0
+                self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, final_target)
+                # Fallback: try finding path to a safe neighbor
+                if not self.current_astar_path:
+                    safe_target = self.find_nearest_walkable(final_target, search_radius_grid=15)
+                    if safe_target is not None:
+                        self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, safe_target)
+                
+                self.last_astar_target = final_target.copy()
+                self.last_path_index = 0 # [IMPORTANT] Reset index
+                
+                if not self.current_astar_path: 
+                    self.failure_cooldown = 30; return None
+
+        if not self.current_astar_path: return final_target
+
+        # 4. Determine Lookahead Distance
+        if self.drone.state == 'RESCUING': 
+            LOOKAHEAD = 30.0 # Precision required for rescue
+        else:
+            LOOKAHEAD = self.get_adaptive_lookahead() # Adaptive for exploration
         
-        # Apply changes
-        new_rotation = avoid_rot * 0.8
-        new_lateral = avoid_rot * 0.5  # Scuttle sideways
-        new_forward = forward * 0.2    # Slow down to give time for the maneuver
+        # 5. Get Carrot
+        carrot_wp = self.get_carrot_waypoint(self.current_astar_path, lookahead_dist=LOOKAHEAD)
         
-        return new_forward, new_lateral, new_rotation
+        # 6. Safety Check (Line of Sight)
+        # If we can't see the carrot directly, fallback to a closer point
+        if not self.obstacle_map.check_line_of_sight(self.drone.estimated_pos, carrot_wp, safety_radius=2, check_cost=False):
+            fallback_idx = min(self.last_path_index + 2, len(self.current_astar_path)-1)
+            return self.current_astar_path[fallback_idx]
+            
+        return carrot_wp

@@ -1,91 +1,62 @@
 import numpy as np
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
+try:
+    from .navigator import Navigator
+except ImportError:
+    from navigator import Navigator
+from .mapping import THRESHOLD_MIN, THRESHOLD_MAX
 
+MAPPING_REFRESH_RATE = 200 # in timesteps, time between updates to the map by the same drone
 
 class CommunicatorHandler:
     def __init__(self, drone):
         self.drone = drone
-        self.forbidden = dict()
-        self.other_drones_pos = dict()
+        self.comm_counter = 0 
+        self.map_date_update = [0 for i in range (10)] # timestep of last map update given by a certain drone
+        self.list_wounded = []
+        
+        # --- ZONES LOGIC STORAGE ---
+        self.nav = Navigator(self)
+        self.forbidden = dict()          # Unified storage (IDs and 'stuck_' keys)
+        self.other_drones_pos = dict()   # Dictionary of {id: last_known_pos}
         self.FORBIDDEN_RADIUS = 50
 
-    # The function should_wait_in_queue() was removed
-    # to completely eliminate the old queue-based waiting mechanism
+    def process_incoming_messages(self) -> None:
+        self.list_nearby_drones = []
+        self.list_received_maps = [None for i in range(10)]
+        if self.drone.communicator_is_disabled(): return
 
-    def is_target_taken_or_better_candidate(self, target_person_pos):
-        # If there is no target, nothing to coordinate
-        if target_person_pos is None:
-            return False
+        # Update tracking of silent and stationary drones
+        self.update_forbidden_zones()
 
-        # If communication is disabled, we cannot coordinate with teammates
-        if self.drone.communicator_is_disabled():
-            return False
-        
-        # Distance from this drone to the target person
-        my_dist = np.linalg.norm(self.drone.estimated_pos - target_person_pos)
-
-        # Threshold to consider two target coordinates as the same person
-        COORDINATE_MATCH_THRESHOLD = 50.0 
-
-        # Iterate through all received messages from other drones
         for msg_package in self.drone.communicator.received_messages:
-
-            # Extract message content (handle both tuple and raw dict formats)
             content = msg_package[1] if isinstance(msg_package, tuple) else msg_package
-            if not isinstance(content, dict):
-                continue
+            if not isinstance(content, dict): continue
             
-            # Information shared by the other drone
-            other_id = content.get("id")
-            other_state = content.get("state")
-            other_person_pos = content.get("person_pos")
-            other_current_pos = content.get("current_pos")
-            
-            # Skip invalid or incomplete messages
-            if other_person_pos is None or other_current_pos is None:
-                continue
-            
-            # Distance between both drones' targeted persons
-            dist_between_targets = np.linalg.norm(target_person_pos - other_person_pos)
-            
-            # --------------------------------------------------
-            # If both drones are aiming at the SAME victim
-            # --------------------------------------------------
-            if dist_between_targets < COORDINATE_MATCH_THRESHOLD:
-                
-                # Distance from the other drone to the victim
-                other_dist_to_person = np.linalg.norm(other_current_pos - other_person_pos)
+            sender_id = content.get("id")
+            if sender_id is None or sender_id == self.drone.identifier: continue 
 
-                # --------------------------------------------------
-                # CASE 1: The other drone has already secured the victim
-                # (RETURNING or DROPPING)
-                # -> Give up immediately
-                # --------------------------------------------------
-                if other_state in ["RETURNING", "DROPPING"]:
-                    return True 
+            drone_id = content['id']
+            self.list_nearby_drones.append(content['position']) 
 
-                # --------------------------------------------------
-                # CASE 2: Both drones are competing for the same victim
-                # (RESCUING vs RESCUING, EXPLORING vs RESCUING, etc.)
-                #
-                # Strategy:
-                #   1. Compare distances
-                #   2. Use ID as tie-breaker
-                # --------------------------------------------------
-                
-                # If the opponent is significantly closer (> 20 px) -> yield
-                if other_dist_to_person < my_dist - 20.0:
-                    return True
-                
-                # If distances are similar (within 20 px) -> compare IDs
-                # Smaller ID gets priority (simple deterministic rule
-                # to break deadlocks and avoid oscillation)
-                if abs(other_dist_to_person - my_dist) <= 20.0:
-                    if other_id < self.drone.identifier:
-                        return True
+            # Sync stationary drone coordinates shared by other drones
+            remote_zones = content.get("forbidden_zones", [])
+            for zone_pos in remote_zones:
+                rk = f"stuck_{int(zone_pos[0]/5)}_{int(zone_pos[1]/5)}"
+                if rk not in self.forbidden:
+                    self.forbidden[rk] = np.array(zone_pos)
 
-        # No better candidate found -> we can continue targeting
-        return False
+            # --- MAPPING LOGIC ---
+            if self.drone.cnt_timestep - self.map_date_update[drone_id] > MAPPING_REFRESH_RATE:
+                self.list_received_maps[drone_id] = content.get('obstacle_map')
+
+            # --- VICTIM LOGIC ---
+            for elt in content.get('victim_list', []):
+                if elt not in self.drone.victim_manager.registry:
+                   self.drone.victim_manager.registry.append(elt)
+        
+        self.consolidate_maps()
+        return         
     
     def other_pos(self):
         """Save other drones' position and detect lost drones safely. In addition,
@@ -123,42 +94,119 @@ class CommunicatorHandler:
             pos = self.other_drones_pos.get(drone_id)
             if pos is not None:
                 self.forbidden[drone_id] = pos  # store last-known position
-                
-    def is_forbidden(self, pos, R=None):
-        """Check if a position is inside forbidden zones (self.forbidden)."""
-        radius = R if R is not None else self.FORBIDDEN_RADIUS
-        pos = np.array(pos)
-        for f_pos in self.forbidden.values():
-            if np.linalg.norm(pos - f_pos) <= radius:
-                return True
-        return False
-    
-    def avoid_forbidden_target(self, target, step=50.0):
-        """
-        Adjust the target to avoid forbidden zones (lost drones).
-        Returns a new target that is not inside any forbidden zone.
-        """
-        if target is None:
-            return None
-        target = np.array(target)
-    
-        if not self.is_forbidden(target):
-            return target
-    
-        # Simple avoidance: try to slide in 8 directions around original target
-        angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-        for angle in angles:
-            candidate = target + step * np.array([np.cos(angle), np.sin(angle)])
-            if not self.is_forbidden(candidate):
-                return candidate
-    
-        # If no safe candidate found, just return original target
-        return target
 
-    def mark_as_stuck(self, pos):
-        """Adds a stationary drone's position to the forbidden zones."""
-        if pos is None: return
-        # Create a unique key to distinguish from lost-comms drones 
-        # by dividing by 5, so we can overwrite the jitters
-        stuck_key = f"stuck_{int(pos[0]/5)}_{int(pos[1]/5)}" 
-        self.forbidden[stuck_key] = np.array(pos)
+    def mark_as_stuck(self):
+        """
+        Handles current stationary positions for drones physically detected as 
+        stuck.
+        """
+        if not hasattr(self.drone, 'nav'): return
+        
+        coords_list = self.drone.nav.get_stationary_drone_coordinates()
+        if not coords_list: return
+        
+        for pos in coords_list:
+            stuck_key = f"stuck_{int(pos[0]/5)}_{int(pos[1]/5)}" 
+            self.forbidden[stuck_key] = np.array(pos)
+    
+    def update_forbidden_zones(self):
+        """
+        Combined logic to return:
+        1. Last-known position of drones that lost communication.
+        2. Stationary drone positions from the navigator.
+        3. Recovery: Removes drones from forbidden if they start talking again.
+        """
+        # Update from Sensors
+        self.mark_as_stuck()
+        
+        # Update from Comms
+        self.other_pos()
+        return self.forbidden
+
+    def consolidate_maps(self) -> None:
+
+        '''
+        This function will handle consolidating maps from other drones. Concretely, it will receive maps from nearby drones, make sure that we haven't received an update in a while and applies the update if necessary to the map.
+        
+        :param self: self
+        :return: None
+        :rtype: None
+        '''
+
+        for drone_id in range(10):
+
+            obs_map = self.list_received_maps[drone_id]
+            if obs_map is None:
+                continue
+            for y in range(len(obs_map)):
+                for x in range(len(obs_map[y])):
+
+                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
+
+                    if obs_map[y][x] > 0:
+
+                        if diff <= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+
+                    else:
+                        if diff >= 0: continue
+                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+
+                    self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+
+            self.map_date_update[drone_id] = self.drone.cnt_timestep
+    
+
+    def priority(self) -> int: 
+        '''
+        Returns an integer giving the "priority" of a drone, 
+        the higher the integer, the more priority the drone gets. this helps resolve traffic jams. 
+        If a drone is carrying a wounded, it has the priority over non-carrying drones. 
+        In case of a tie, the drone with the highest identifier wins.
+        :return: Priority value
+        :rtype: int
+        '''
+        
+        return self.drone.identifier + 100 if self.drone.grasped_wounded_persons() else self.drone.identifier        
+
+
+    def create_new_message(self) -> dict:
+        '''
+        This function handles the creation of the message to be communicated by the drone
+        we only send the map every 50 timestep to optimise the code further:
+        'id',
+        'position',
+        'state',
+        'obstacle_map' ,
+        'priority',
+        'victim_list',
+        'victim_chosen',
+        
+        :param self: self
+        :return: All information necessary to be communicated
+        :rtype: dict
+        '''
+        if self.drone.state == 'EXPLORING':
+
+            victim = self.drone.best_victim_pos
+        
+        else: victim = None
+        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
+            obstacle_map = self.drone.nav.obstacle_map.grid  
+        else: obstacle_map = None
+        
+        # List of all forbidden coordinates (stuck + lost comms)
+        forbidden_list = [pos.tolist() for pos in self.forbidden.values()]
+        
+        return_dict =   {'id' : self.drone.identifier,
+                        'position' : self.drone.estimated_pos,
+                        'state' : self.drone.state,
+                        'grasping' : True if self.drone.grasped_wounded_persons() else False,
+                        'obstacle_map' : obstacle_map,
+                        'priority': self.priority(),
+                        'victim_list': self.drone.victim_manager.registry,
+                        'victim_chosen': victim,
+                        'forbidden_zones': forbidden_list
+        }
+
+        return return_dict
