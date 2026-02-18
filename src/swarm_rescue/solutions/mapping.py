@@ -157,7 +157,7 @@ class GridMap:
         sx, sy = self.world_to_grid(start_pos[0], start_pos[1])
         ex, ey = self.world_to_grid(end_pos[0], end_pos[1])
         self.update_cost_map()
-        if self.cost_map[ey, ex] > 2000: return [] 
+        if self.cost_map[ey, ex] > 9000: return [] 
         open_list = []
         heapq.heappush(open_list, (0, sx, sy))
         came_from = {}
@@ -178,7 +178,7 @@ class GridMap:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
                     cell_cost = self.cost_map[ny, nx]
-                    if cell_cost >= 9999.0: continue 
+                    if cell_cost >= 9000.0: continue 
                     new_g = g_score[(cx, cy)] + (move_cost * cell_cost)
                     if (nx, ny) not in g_score or new_g < g_score[(nx, ny)]:
                         g_score[(nx, ny)] = new_g
@@ -261,11 +261,34 @@ class GridMap:
             for dx, dy, cost_mult in moves:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
-                    if self.grid[ny, nx] > -1.0: continue # Only expand on Free Space
+                    
+                    # [LOOSEN MAP LOGIC] - Nới lỏng điều kiện
+                    # 1. Kiểm tra xem ô này có phải là đất sạch không?
+                    is_free_space = (self.grid[ny, nx] < -1.0)
+                    
+                    # 2. Kiểm tra xem ô này có nằm gần vị trí bắt đầu không? (Bán kính ~15 grid = 1.2m)
+                    # Nếu đang ở gần, cho phép đi qua cả Unknown (để thoát kẹt)
+                    dist_sq_from_start = (nx - start_gx)**2 + (ny - start_gy)**2
+                    is_near_start = (dist_sq_from_start < 225) # 15^2
+                    
+                    # LUẬT: Chỉ đi nếu là Đất Sạch HOẶC Đang ở gần (và không phải tường cứng)
+                    if not is_free_space:
+                        # Nếu không phải đất sạch, chỉ cho phép đi nếu ở gần start
+                        if not is_near_start:
+                            continue
+                        # Nếu ở gần start, nhưng là tường cứng (> 20.0) thì vẫn cấm
+                        if self.grid[ny, nx] > 20.0:
+                            continue
 
+                    # Lấy Cost từ CostMap (nếu có)
                     cell_risk = 1.0
-                    if self.cost_map is not None: cell_risk = self.cost_map[ny, nx]
-                    if cell_risk >= 9999.0: continue 
+                    if self.cost_map is not None:
+                        cell_risk = self.cost_map[ny, nx]
+                    
+                    # Nới lỏng ngưỡng chặn tường một chút (từ 9999 xuống 20000 để chắc chắn)
+                    # Nhưng quan trọng: Nếu đang ở vùng nguy hiểm (Cost cao), vẫn cho đi qua để tìm đường thoát
+                    if cell_risk >= 9999.0 and not is_near_start: 
+                        continue 
                     
                     new_cost = curr_dist + (cost_mult * cell_risk)
                     if new_cost < dist_matrix[ny, nx]:

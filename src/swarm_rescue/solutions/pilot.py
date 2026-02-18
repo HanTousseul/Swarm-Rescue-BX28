@@ -132,10 +132,38 @@ class Pilot:
 
         return total_lat, speed_factor
 
-    def repulsive_force(self):
+    def low_battery(self, steps_remaining: int, RETURN_TRIGGER_STEPS: int) -> None:
+        '''
+        Takes care of the returning when little timesteps are left. Mainly changes drone states
+        
+        :param self: self
+        :param steps_remaining: number of steps remaining before the end
+        :type steps_remaining: int
+        :param RETURN_TRIGGER_STEPS: Number of timesteps before needing to go back
+        :type RETURN_TRIGGER_STEPS: int
+        :return: None
+        '''
 
-        total_correction_norm = 0.7
-        repulsion_coeff = 20
+        if steps_remaining <= RETURN_TRIGGER_STEPS:
+            if not self.drone.grasped_wounded_persons():
+                if self.drone.is_inside_return_area: self.drone.state = "END_GAME"
+            else:
+                if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
+                    print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
+                    self.drone.state = "RETURNING"
+                    self.drone.current_target = None 
+
+
+    def repulsive_force(self, total_correction_norm:float = 0.7) -> tuple:
+        '''
+        returns a radial and an orthoradial component of a repulsive force that helps with preventing collisions with surroundings
+        
+        :param self: self
+        :param total_correction_norm: An (optional) float describing the force exerted on the drone
+        :type force: int
+        :return: (radial, orthoradial)
+        :rtype: tuple
+        '''
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
 
@@ -147,7 +175,7 @@ class Pilot:
 
             if lidar_data[elt] < 220:
 
-                force = repulsion_coeff / lidar_data[elt] ** 2 
+                force = 1 / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
 
                 total_rad_repulsion += force * np.cos(unit_vector_angle)
@@ -157,7 +185,7 @@ class Pilot:
 
             if (elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and self.drone.state == 'RESCUING') or (self.drone.state == 'RETURNING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER):
 
-                force = 20
+                force = 1/10
 
                 total_rad_repulsion += force * np.cos(elt.angle)
                 total_orthor_repulsion += force *np.sin(elt.angle)
@@ -166,19 +194,37 @@ class Pilot:
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
 
         actual_norm_correction = math.hypot(total_rad_repulsion,total_orthor_repulsion)
-        if actual_norm_correction < 0.1: return 0,0
+        if actual_norm_correction < 0.001: return 0,0
 
         total_rad_repulsion *= total_correction_norm / actual_norm_correction
         total_orthor_repulsion *= total_correction_norm / actual_norm_correction
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
-    def move_to_target_carrot(self) -> CommandsDict:
-        """
+    def stand_still(self, grasper) -> CommandsDict:
+        '''
+        returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
+        
+        :param self: self
+        :param grasper: whether or not we are currently grasping
+        :type grasper: bool
+        :return: {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": grasper}
+        :rtype: CommandsDict
+        '''
+        forward, lateral = self.repulsive_force(total_correction_norm = 0.2) # soft movement
+        return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
+
+    def move_to_target_carrot(self, MAX_SPEED: float) -> CommandsDict:
+        '''
         Main control loop.
-        """
+        :param self: self
+        :param MAX_SPEED: max speed allowed for the drone
+        :type MAX_SPEED: float
+        :return: Description
+        :rtype: CommandsDict
+        '''
         if self.drone.current_target is None:
-            return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
+            return self.drone.pilot.stand_still(grasper = False)
 
         # 1. Estimate Speed
         if self.last_pos is not None:
@@ -220,19 +266,19 @@ class Pilot:
         rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
 
         # 3. Wall Avoidance
-        wall_lat, wall_speed_factor = self.calculate_wall_repulsion(aggressive=is_aggressive, angle_error=angle_error)
+        repulsion_rad, repulsion_orthor = self.repulsive_force()
 
         if is_final_approach:
-            wall_lat = 0.0          
-            wall_speed_factor = 1.0 
-
-        # 4. Forward Speed Control
-        MAX_SPEED = 0.9
+            repulsion_orthor = 0.0          
+            repulsion_rad = 0.5
 
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
 
-        forward_cmd = MAX_SPEED * alignment_factor * wall_speed_factor
+        forward_cmd = MAX_SPEED * alignment_factor + repulsion_rad
+
+        if forward_cmd > 1: forward_cmd = 1
+        elif forward_cmd < -1: forward_cmd = -1
 
         # 5. Active Braking & Approach
         BRAKE_DIST = 120.0 
@@ -250,13 +296,8 @@ class Pilot:
         if is_reversing: forward_cmd = -forward_cmd
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
 
-        # 6. Lateral Control
-        cmd_lateral = 0.0
-        _, drone_lat = self.calculate_repulsive_force()
-        cmd_lateral = drone_lat + wall_lat
-
         if abs(angle_error) > 0.5 and not is_reversing:
-            cmd_lateral += -0.5 * np.sign(angle_error)
+            repulsion_orthor += -0.5 * np.sign(angle_error)
 
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
@@ -268,7 +309,7 @@ class Pilot:
 
         return {
             "forward": forward_cmd,
-            "lateral": np.clip(cmd_lateral, -1.0, 1.0),
+            "lateral": np.clip(repulsion_orthor, -1.0, 1.0),
             "rotation": rotation_cmd,
             "grasper": grasper_val
         }

@@ -74,6 +74,7 @@ class CommunicatorHandler:
             self.drone.nav.obstacle_map.grid[mask_free] = obs_map[mask_free]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
+        self.drone.nav.obstacle_map.update_cost_map()
     
 
     def priority(self) -> int: 
