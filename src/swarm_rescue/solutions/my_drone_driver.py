@@ -7,16 +7,18 @@ from swarm_rescue.simulation.drone.controller import CommandsDict
 from swarm_rescue.simulation.drone.drone_abstract import DroneAbstract
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 
-try:
-    from .navigator import Navigator
-    from .pilot import Pilot
-    from .communicator import CommunicatorHandler
-    from .victim_manager import VictimManager
-except ImportError:
-    from navigator import Navigator
-    from pilot import Pilot
-    from communicator import CommunicatorHandler
-    from victim_manager import VictimManager
+
+from swarm_rescue.solutions.navigator import Navigator
+from swarm_rescue.solutions.pilot import Pilot
+from swarm_rescue.solutions.communicator import CommunicatorHandler
+from swarm_rescue.solutions.victim_manager import VictimManager
+
+
+
+# CONSTANTS 
+STUCK_TIME_EXPLORING = 50 #(timestep)
+STUCK_TIME_OTHER = 70 #(timestep)
+MAX_SPEED = 0.9 #in [0,1]
 
 class MyStatefulDrone(DroneAbstract):
     """
@@ -27,7 +29,7 @@ class MyStatefulDrone(DroneAbstract):
     
     def __init__(self, identifier: Optional[int] = None, **kwargs):
         super().__init__(identifier=identifier, **kwargs)
-        
+
         # Config
         misc_data = kwargs.get('misc_data')
         self.max_timesteps = 2700 
@@ -71,6 +73,9 @@ class MyStatefulDrone(DroneAbstract):
         """
         Main control loop called by the simulator every step.
         """
+        
+        RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+        
         self.cnt_timestep += 1
         
         # 1. SENSING
@@ -113,7 +118,7 @@ class MyStatefulDrone(DroneAbstract):
             self.rescue_center_masked = True
             print(f"[{self.identifier}] 🚫 Masked Rescue Center.")
 
-        # Debug visualization (Drone 0 only)
+        # Debug visualization
         if self.cnt_timestep % 5 == 0:
             self.nav.obstacle_map.display(
                 self.estimated_pos, 
@@ -131,41 +136,30 @@ class MyStatefulDrone(DroneAbstract):
         # --- STATE: DISPERSING ---
         # Initial spread to avoid collisions at spawn.
         if self.state == "DISPERSING":
-            if self.cnt_timestep < 40:
-                _, lat_drone = self.pilot.calculate_repulsive_force()
-                return {"forward": 0.0, "lateral": np.clip(lat_drone, -1, 1), "rotation": 1.0, "grasper": 0}
-            elif self.cnt_timestep < 50:
-                 return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
+            if self.cnt_timestep < 60:
+                
+                forward, lateral = self.pilot.repulsive_force()
+                return {"forward": forward, "lateral": lateral, "rotation": 0, "grasper": 0}
+            
             else:
                 print(f"[{self.identifier}] 🚀 WARMUP DONE. EXPLORING!")
                 self.state = "EXPLORING"
 
         # --- BATTERY GUARD ---
         steps_remaining = self.max_timesteps - self.cnt_timestep
-        RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
-        if steps_remaining <= RETURN_TRIGGER_STEPS:
-            if self.is_inside_return_area: self.state = "END_GAME"
-            else:
-                if self.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                    print(f"[{self.identifier}] 🔋 LOW BATTERY. Returning.")
-                    self.state = "RETURNING"
-                    self.current_target = None 
+        self.pilot.low_battery(steps_remaining, RETURN_TRIGGER_STEPS)
 
         # --- ANTI-STUCK ---
         # Checks if position hasn't changed significantly over a time window.
-        self.pos_history_long.append(self.estimated_pos.copy())
-        waiting = 130 if self.state == 'EXPLORING' else 150
-        if len(self.pos_history_long) > waiting: self.pos_history_long.pop(0) 
-        if self.state not in ["END_GAME", "DISPERSING"] and len(self.pos_history_long) == waiting and steps_remaining > RETURN_TRIGGER_STEPS:
-            start_pos = self.pos_history_long[0]
-            dist_moved = np.linalg.norm(self.estimated_pos - start_pos)
-            if dist_moved < 8.0:
-                print(f"[{self.identifier}] ⚠️ STUCK. Wiggling...")
-                self.nav.current_astar_path = []
-                # Random maneuver to break free
-                fwd = 0; lat = 1.0 if random.random() > 0.5 else -1.0
-                grasper = 1 if self.grasped_wounded_persons() else 0
-                return {"forward": fwd, "lateral": lat, "rotation": 0.0, "grasper": grasper}
+        if self.nav.is_stuck(steps_remaining, RETURN_TRIGGER_STEPS, STUCK_TIME_EXPLORING, STUCK_TIME_OTHER):
+            self.nav.current_astar_path = []
+            
+            # [NEW STRATEGY] Wall Repulsion Unstuck
+            # 1. Tính lực đẩy từ tường (dùng mode aggressive để lực mạnh hơn)
+            radial,orthoradial = self.pilot.repulsive_force()
+            
+            grasper = 1 if self.grasped_wounded_persons() else 0
+            return {"forward": radial, "lateral": orthoradial, "rotation": 0.0, "grasper": grasper}
 
         # --- STATE: EXPLORING ---
         if self.state == "EXPLORING":
@@ -190,7 +184,6 @@ class MyStatefulDrone(DroneAbstract):
             if self.state == "EXPLORING": 
                 # If current target is None (Arrived, Blocked, or Started)
                 if self.current_target is None:
-                    self.nav.obstacle_map.update_cost_map()
                     frontier, path = self.nav.obstacle_map.get_reachable_frontier_and_path(self.estimated_pos, self.estimated_angle)
                     
                     if frontier is not None:
@@ -221,7 +214,7 @@ class MyStatefulDrone(DroneAbstract):
             dist_to_target = 9999
             if self.current_target is not None:
                 dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target)
-            if dist_to_target < 40: self.rescue_time += 1
+            if dist_to_target < 70: self.rescue_time += 1
 
             if semantic_data:
                 for data in semantic_data:
@@ -240,8 +233,10 @@ class MyStatefulDrone(DroneAbstract):
                         break 
 
             # Rescue Timeout
-            if self.rescue_time >= 150:
-                if self.current_target is not None: self.victim_manager.delete_victim_at(self.current_target)
+            if self.rescue_time >= 100:
+                if self.current_target is not None: 
+                    print(f"{[self.identifier]} Delete victim at {self.current_target}")
+                    self.victim_manager.delete_victim_at(self.current_target)
                 self.current_target = None
                 self.state = 'EXPLORING'; self.nav.current_astar_path = []; self.rescue_time = 0
                 return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
@@ -271,7 +266,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.state = "EXPLORING" 
                 self.current_target = None
                 return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
-            return self.pilot.move_to_target_carrot()
+            return self.pilot.move_to_target_carrot(MAX_SPEED)
 
         # --- STATE: END GAME ---
         elif self.state == "END_GAME":
@@ -284,7 +279,7 @@ class MyStatefulDrone(DroneAbstract):
             dist = np.linalg.norm(self.estimated_pos - self.current_target)
             
             USE_DIRECT_PID = False
-            if (self.state in ["RESCUING", "RETURNING"]) and (dist < 100.0):
+            if (self.state in ["RESCUING", "RETURNING"]) and (dist < 150.0):
                 if self.nav.obstacle_map.check_line_of_sight(self.estimated_pos, self.current_target, safety_radius=1, check_cost=False):
                     USE_DIRECT_PID = True
             
@@ -354,16 +349,20 @@ class MyStatefulDrone(DroneAbstract):
                     if self.state == "RETURNING" and self.initial_position is not None:
                          if np.linalg.norm(self.current_target - self.initial_position) > 10.0:
                              self.current_target = self.initial_position
-                             return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 1}
+                             return self.pilot.stand_still(grasper = 1)
                     return {"forward": 0.0, "lateral": 1.0, "rotation": 0.5, "grasper": 1 if self.grasped_wounded_persons() else 0}
 
         if next_waypoint is None:
-             return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 1 if self.grasped_wounded_persons() else 0}
+            print(f'[{self.identifier}] No next waypoint {self.estimated_pos}')
+            if self.grasped_wounded_persons(): grasper = 1
+            else: grasper = 0
+            
+            return self.pilot.stand_still(grasper)
         
         # Execute Pilot Command
         real_target = self.current_target 
         self.current_target = next_waypoint 
-        command = self.pilot.move_to_target_carrot()
+        command = self.pilot.move_to_target_carrot(MAX_SPEED)
         self.current_target = real_target 
         return command
 
