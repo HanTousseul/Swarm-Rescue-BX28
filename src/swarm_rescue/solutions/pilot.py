@@ -132,19 +132,15 @@ class Pilot:
 
         return total_lat, speed_factor
 
-    def low_battery(self, steps_remaining: int, RETURN_TRIGGER_STEPS: int) -> None:
+    def low_battery(self) -> None:
         '''
         Takes care of the returning when little timesteps are left. Mainly changes drone states
         
         :param self: self
-        :param steps_remaining: number of steps remaining before the end
-        :type steps_remaining: int
-        :param RETURN_TRIGGER_STEPS: Number of timesteps before needing to go back
-        :type RETURN_TRIGGER_STEPS: int
         :return: None
         '''
 
-        if steps_remaining <= RETURN_TRIGGER_STEPS:
+        if self.drone.steps_remaining <= self.drone.RETURN_TRIGGER_STEPS:
             if not self.drone.grasped_wounded_persons():
                 if self.drone.is_inside_return_area: self.drone.state = "END_GAME"
             else:
@@ -174,6 +170,7 @@ class Pilot:
         for elt in range (180):
 
             if lidar_data[elt] < 220:
+                if lidar_data[elt] == 0: lidar_data[elt] = 0.1
 
                 force = 1 / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
@@ -201,25 +198,52 @@ class Pilot:
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
-    def stand_still(self, grasper) -> CommandsDict:
+    def stand_still(self, grasper: int) -> CommandsDict:
         '''
         returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
         
         :param self: self
-        :param grasper: whether or not we are currently grasping
-        :type grasper: bool
+        :param grasper: whether or not we are currently grasping (0 or 1)
+        :type grasper: int
         :return: {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": grasper}
         :rtype: CommandsDict
         '''
         forward, lateral = self.repulsive_force(total_correction_norm = 0.2) # soft movement
         return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
 
-    def move_to_target_carrot(self, MAX_SPEED: float) -> CommandsDict:
+    def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.5) -> CommandsDict:
+        
+        '''
+        returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
+        
+        :param self: self
+        :param forward: forward velocity in (-1,1). Negative values indicate backwards movement
+        :type forward: float
+        :param lateral: lateral velocity in (-1,1)
+        :type lateral: float
+        :param rotation: rotational velocity in (-1,1)
+        :type rotation: float
+        :param grasper: whether or not we are currently grasping (0 or 1)
+        :type grasper: int
+        :param repulsive_force_bool: whether or not to generate evasive repulsive force
+        :type repulsive_force_bool: bool
+        :param total_correction_norm: norm of the repulsive (correction) force
+        :type total_correction_norm: float
+        :return: {"forward", "lateral", "rotation", "grasper"}
+        :rtype: CommandsDict
+        '''
+        
+        if repulsive_force_bool:
+            corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm) # soft movement
+            forward += corr1
+            lateral += corr2
+
+        return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
+
+    def move_to_target_carrot(self) -> CommandsDict:
         '''
         Main control loop.
         :param self: self
-        :param MAX_SPEED: max speed allowed for the drone
-        :type MAX_SPEED: float
         :return: Description
         :rtype: CommandsDict
         '''
@@ -275,7 +299,7 @@ class Pilot:
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
 
-        forward_cmd = MAX_SPEED * alignment_factor + repulsion_rad
+        forward_cmd = self.drone.MAX_SPEED * alignment_factor + repulsion_rad
 
         if forward_cmd > 1: forward_cmd = 1
         elif forward_cmd < -1: forward_cmd = -1

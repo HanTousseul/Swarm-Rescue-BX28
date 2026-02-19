@@ -92,27 +92,19 @@ class Navigator:
         safe_pos = self.find_nearest_walkable(target_pos, search_radius_grid=20)
         return safe_pos
 
-    def is_stuck(self, steps_remaining: int, RETURN_TRIGGER_STEPS: int, STUCK_TIME_EXPLORING: int, STUCK_TIME_OTHER:int) -> bool:
+    def is_stuck(self) -> bool:
         '''
         function that returns whether or not the drone is stuck, to help unstuck it by re choosing next target
         
         :param self: self
-        :param steps_remaining: number of timesteps remaining before the end
-        :type steps_remaining: int
-        :param RETURN_TRIGGER_STEPS: Constant that gives the number of steps after which we need to head back
-        :type RETURN_TRIGGER_STEPS: int
-        :param STUCK_TIME_EXPLORING: number of timesteps allowed while exploring before considering the drone stuck
-        :type STUCK_TIME_EXPLORING: int
-        :param STUCK_TIME_OTHER: number of timesteps allowed while not exploring before considering the drone stuck
-        :type STUCK_TIME_OTHER: int
         :return: Whether or not the drone is stuck
         :rtype: bool        
         '''
 
         self.drone.pos_history_long.append(self.drone.estimated_pos.copy())
-        waiting = STUCK_TIME_EXPLORING if self.drone.state == 'EXPLORING' else STUCK_TIME_OTHER
+        waiting = self.drone.STUCK_TIME_EXPLORING if self.drone.state == 'EXPLORING' else self.drone.STUCK_TIME_OTHER
         if len(self.drone.pos_history_long) > waiting: self.drone.pos_history_long.pop(0) 
-        if self.drone.state not in ["END_GAME", "DISPERSING"] and len(self.drone.pos_history_long) == waiting and steps_remaining > RETURN_TRIGGER_STEPS:
+        if self.drone.state not in ["END_GAME", "DISPERSING"] and len(self.drone.pos_history_long) == waiting and self.drone.steps_remaining > self.drone.RETURN_TRIGGER_STEPS:
             start_pos = self.drone.pos_history_long[0]
             dist_moved = np.linalg.norm(self.drone.estimated_pos - start_pos)
             if dist_moved < 8.0:

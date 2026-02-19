@@ -15,10 +15,7 @@ from swarm_rescue.solutions.victim_manager import VictimManager
 
 
 
-# CONSTANTS 
-STUCK_TIME_EXPLORING = 50 #(timestep)
-STUCK_TIME_OTHER = 70 #(timestep)
-MAX_SPEED = 0.9 #in [0,1]
+
 
 class MyStatefulDrone(DroneAbstract):
     """
@@ -69,12 +66,16 @@ class MyStatefulDrone(DroneAbstract):
         # Counts consecutive pathfinding failures to implement "Patience" before blacklisting
         self.path_fail_count = 0 
 
+        # CONSTANTS 
+        self.STUCK_TIME_EXPLORING = 50 #(timestep)
+        self.STUCK_TIME_OTHER = 70 #(timestep)
+        self.MAX_SPEED = 0.9 #in [0,1]
+        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+
     def control(self) -> CommandsDict:
         """
         Main control loop called by the simulator every step.
         """
-        
-        RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
         
         self.cnt_timestep += 1
         
@@ -146,12 +147,12 @@ class MyStatefulDrone(DroneAbstract):
                 self.state = "EXPLORING"
 
         # --- BATTERY GUARD ---
-        steps_remaining = self.max_timesteps - self.cnt_timestep
-        self.pilot.low_battery(steps_remaining, RETURN_TRIGGER_STEPS)
+        self.steps_remaining = self.max_timesteps - self.cnt_timestep
+        self.pilot.low_battery()
 
         # --- ANTI-STUCK ---
         # Checks if position hasn't changed significantly over a time window.
-        if self.nav.is_stuck(steps_remaining, RETURN_TRIGGER_STEPS, STUCK_TIME_EXPLORING, STUCK_TIME_OTHER):
+        if self.nav.is_stuck():
             self.nav.current_astar_path = []
             
             # [NEW STRATEGY] Wall Repulsion Unstuck
@@ -239,7 +240,7 @@ class MyStatefulDrone(DroneAbstract):
                     self.victim_manager.delete_victim_at(self.current_target)
                 self.current_target = None
                 self.state = 'EXPLORING'; self.nav.current_astar_path = []; self.rescue_time = 0
-                return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
+                return self.pilot.stand_still(grasper = 0)
             
             # Successful Grasp
             if self.grasped_wounded_persons():
@@ -253,7 +254,7 @@ class MyStatefulDrone(DroneAbstract):
         # --- RETURNING & DROPPING ---
         elif self.state == "RETURNING":
             if self.current_target is None: self.current_target = self.initial_position
-            if np.linalg.norm(self.estimated_pos - self.current_target) < 50.0 and steps_remaining > RETURN_TRIGGER_STEPS:
+            if np.linalg.norm(self.estimated_pos - self.current_target) < 50.0 and self.steps_remaining > self.RETURN_TRIGGER_STEPS:
                 self.state = "DROPPING"
 
         elif self.state == "DROPPING":
@@ -265,12 +266,12 @@ class MyStatefulDrone(DroneAbstract):
                 self.nav.current_astar_path = []
                 self.state = "EXPLORING" 
                 self.current_target = None
-                return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
-            return self.pilot.move_to_target_carrot(MAX_SPEED)
+                return self.pilot.stand_still(grasper = 0)
+            return self.pilot.move_to_target_carrot()
 
         # --- STATE: END GAME ---
         elif self.state == "END_GAME":
-            return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
+            self.pilot.stand_still(grasper = 0)
 
         # ================= EXECUTION =================
         next_waypoint = None
@@ -337,7 +338,9 @@ class MyStatefulDrone(DroneAbstract):
                 # print(f"[{self.identifier}] Target Done/Invalid (Obs:{target_obstructed}). Resetting.")
                 self.current_target = None
                 self.nav.current_astar_path = []
-                return {"forward": 0.0, "lateral": 0.0, "rotation": 0, "grasper": 0}
+                if self.grasped_wounded_persons(): grasper = 1
+                else: grasper = 0
+                return self.pilot.stand_still(grasper)
 
         elif self.state in ["RETURNING", "RESCUING"] and self.current_target is not None:
              if next_waypoint is None and not USE_DIRECT_PID:
@@ -362,7 +365,7 @@ class MyStatefulDrone(DroneAbstract):
         # Execute Pilot Command
         real_target = self.current_target 
         self.current_target = next_waypoint 
-        command = self.pilot.move_to_target_carrot(MAX_SPEED)
+        command = self.pilot.move_to_target_carrot()
         self.current_target = real_target 
         return command
 
