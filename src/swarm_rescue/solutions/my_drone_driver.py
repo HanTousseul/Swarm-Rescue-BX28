@@ -140,7 +140,7 @@ class MyStatefulDrone(DroneAbstract):
             if self.cnt_timestep < 60:
                 
                 forward, lateral = self.pilot.repulsive_force()
-                return {"forward": forward, "lateral": lateral, "rotation": 0, "grasper": 0}
+                return self.pilot.move_function(forward = forward, lateral = lateral, rotation = 0, grasper = 0, repulsive_force_bool = True)
             
             else:
                 print(f"[{self.identifier}] 🚀 WARMUP DONE. EXPLORING!")
@@ -160,7 +160,7 @@ class MyStatefulDrone(DroneAbstract):
             radial,orthoradial = self.pilot.repulsive_force()
             
             grasper = 1 if self.grasped_wounded_persons() else 0
-            return {"forward": radial, "lateral": orthoradial, "rotation": 0.0, "grasper": grasper}
+            return self.pilot.move_function(forward = radial, lateral = orthoradial, rotation = 0, grasper = grasper, repulsive_force_bool = True)
 
         # --- STATE: EXPLORING ---
         if self.state == "EXPLORING":
@@ -208,7 +208,7 @@ class MyStatefulDrone(DroneAbstract):
                         self.current_target = self.nav.obstacle_map.get_random_free_target(self.estimated_pos)
                         self.path_fail_count = 0
                         if self.current_target is None:
-                            return {"forward": 0.0, "lateral": 0.0, "rotation": 0.8, "grasper": 0}
+                            return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0.8, grasper = 0, repulsive_force_bool = True)
 
         # --- STATE: RESCUING ---
         elif self.state == "RESCUING":
@@ -240,7 +240,7 @@ class MyStatefulDrone(DroneAbstract):
                     self.victim_manager.delete_victim_at(self.current_target)
                 self.current_target = None
                 self.state = 'EXPLORING'; self.nav.current_astar_path = []; self.rescue_time = 0
-                return self.pilot.stand_still(grasper = 0)
+                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
             
             # Successful Grasp
             if self.grasped_wounded_persons():
@@ -266,12 +266,12 @@ class MyStatefulDrone(DroneAbstract):
                 self.nav.current_astar_path = []
                 self.state = "EXPLORING" 
                 self.current_target = None
-                return self.pilot.stand_still(grasper = 0)
+                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
             return self.pilot.move_to_target_carrot()
 
         # --- STATE: END GAME ---
         elif self.state == "END_GAME":
-            self.pilot.stand_still(grasper = 0)
+            self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
 
         # ================= EXECUTION =================
         next_waypoint = None
@@ -307,7 +307,7 @@ class MyStatefulDrone(DroneAbstract):
                         keep_grasping = 1 if self.grasped_wounded_persons() else 0
                         
                         # Xoay người để thoát kẹt, nhưng vẫn giữ victim
-                        return {"forward": 0.0, "lateral": 0.0, "rotation": 1.0, "grasper": keep_grasping} 
+                        return self.pilot.move_function(forward = 0, lateral = 0, rotation = 1.0, grasper = keep_grasping, repulsive_force_bool = True)
                 else:
                     self.path_fail_count = 0
                 
@@ -340,7 +340,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.nav.current_astar_path = []
                 if self.grasped_wounded_persons(): grasper = 1
                 else: grasper = 0
-                return self.pilot.stand_still(grasper)
+                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
 
         elif self.state in ["RETURNING", "RESCUING"] and self.current_target is not None:
              if next_waypoint is None and not USE_DIRECT_PID:
@@ -352,15 +352,18 @@ class MyStatefulDrone(DroneAbstract):
                     if self.state == "RETURNING" and self.initial_position is not None:
                          if np.linalg.norm(self.current_target - self.initial_position) > 10.0:
                              self.current_target = self.initial_position
-                             return self.pilot.stand_still(grasper = 1)
-                    return {"forward": 0.0, "lateral": 1.0, "rotation": 0.5, "grasper": 1 if self.grasped_wounded_persons() else 0}
+                             return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 1, repulsive_force_bool = True)
+                         
+                    if self.grasped_wounded_persons(): grasped = 1
+                    else: grasped = 0
+                    return self.pilot.move_function(forward = 0, lateral = 1, rotation = 0.5, grasper = grasped)
 
         if next_waypoint is None:
             print(f'[{self.identifier}] No next waypoint {self.estimated_pos}')
             if self.grasped_wounded_persons(): grasper = 1
             else: grasper = 0
             
-            return self.pilot.stand_still(grasper)
+            return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
         
         # Execute Pilot Command
         real_target = self.current_target 

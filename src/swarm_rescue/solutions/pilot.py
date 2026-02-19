@@ -56,29 +56,14 @@ class Pilot:
         grasp_distance = 32.0
 
         if abs_error > align_threshold:
-            return {
-                "forward": 0.0,
-                "lateral": 0.0,
-                "rotation": float(np.clip(3.0 * angle_error, -1.0, 1.0)),
-                "grasper": 0
-            }
+            return self.move_function(forward = 0, lateral = 0, rotation = float(np.clip(3.0 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
 
         if wounded.distance > grasp_distance:
             approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
-            return {
-                "forward": approach_speed,
-                "lateral": 0.0,
-                "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
-                "grasper": 0
-            }
+            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
 
-        return {
-            "forward": 0.06,
-            "lateral": 0.0,
-            "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
-            "grasper": 1
-        }
-
+        return self.move_function(forward = 0.6, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
+    
     def calculate_repulsive_force(self):
         """Calculates repulsive force to avoid colliding with other drones."""
         total_lat = 0.0
@@ -187,6 +172,16 @@ class Pilot:
                 total_rad_repulsion += force * np.cos(elt.angle)
                 total_orthor_repulsion += force *np.sin(elt.angle)
 
+            if elt.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
+
+                if elt.distance == 0: force = 100
+                else: force = 4/elt.distance ** 2
+     
+                unit_vector_angle = elt.angle + math.pi
+
+                total_rad_repulsion += force * np.cos(unit_vector_angle)
+                total_orthor_repulsion += force *np.sin(unit_vector_angle)
+
         #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
 
@@ -196,22 +191,11 @@ class Pilot:
         total_rad_repulsion *= total_correction_norm / actual_norm_correction
         total_orthor_repulsion *= total_correction_norm / actual_norm_correction
 
+        print(total_rad_repulsion, total_orthor_repulsion)
+
         return (total_rad_repulsion, total_orthor_repulsion)
 
-    def stand_still(self, grasper: int) -> CommandsDict:
-        '''
-        returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
-        
-        :param self: self
-        :param grasper: whether or not we are currently grasping (0 or 1)
-        :type grasper: int
-        :return: {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": grasper}
-        :rtype: CommandsDict
-        '''
-        forward, lateral = self.repulsive_force(total_correction_norm = 0.2) # soft movement
-        return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
-
-    def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.5) -> CommandsDict:
+    def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.8) -> CommandsDict:
         
         '''
         returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
@@ -235,10 +219,18 @@ class Pilot:
         
         if repulsive_force_bool:
             corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm) # soft movement
+
             forward += corr1
             lateral += corr2
 
-        return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
+        if forward > 1: forward = 1
+        elif forward < -1: forward = -1
+
+        if lateral > 1: lateral = 1
+        elif lateral < -1: lateral = -1
+
+
+        return {"forward": forward, "lateral": lateral, "rotation": rotation, "grasper":grasper}
 
     def move_to_target_carrot(self) -> CommandsDict:
         '''
@@ -331,9 +323,4 @@ class Pilot:
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
 
-        return {
-            "forward": forward_cmd,
-            "lateral": np.clip(repulsion_orthor, -1.0, 1.0),
-            "rotation": rotation_cmd,
-            "grasper": grasper_val
-        }
+        return self.move_function(forward = forward_cmd, lateral = np.clip(repulsion_orthor, -1.0, 1.0), rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
