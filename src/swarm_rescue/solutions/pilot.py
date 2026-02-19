@@ -63,59 +63,6 @@ class Pilot:
             return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True)
 
         return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
-    
-    def calculate_repulsive_force(self):
-        """Calculates repulsive force to avoid colliding with other drones."""
-        total_lat = 0.0
-        semantic_data = self.drone.semantic_values()
-        if not semantic_data: return 0.0, 0.0
-
-        for data in semantic_data:
-            if data.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
-                dist = data.distance
-                if 0.1 < dist < 150.0:
-                    K = 500.0 
-                    force_magnitude = K / (dist ** 2)
-                    force_magnitude = min(1.5, force_magnitude)
-                    push_angle = data.angle + math.pi - 0.5 
-                    total_lat += force_magnitude * math.sin(push_angle)
-        return 0.0, total_lat
-
-    def calculate_wall_repulsion(self, aggressive: bool = False, angle_error: float = 0.0):
-        """Calculates repulsive forces from walls using Lidar."""
-        lidar = self.drone.lidar_values()
-        angles = self.drone.lidar_rays_angles()
-        if lidar is None or angles is None: return 0.0, 1.0 
-
-        total_lat = 0.0
-        min_dist_detected = 300.0
-
-        if aggressive:
-            K_wall = 120.0; ignore_dist = 40.0; critical_dist = 10.0; slow_down_threshold = 40.0
-        else:
-            K_wall = 350.0; ignore_dist = 80.0; critical_dist = 20.0; slow_down_threshold = 60.0
-
-        # Smart Repulsion: Reduce push if aiming at a gap
-        if abs(angle_error) < 0.2:
-            K_wall *= 0.4
-
-        step = 5 
-        for i in range(0, len(lidar), step):
-            dist = lidar[i]
-            if 10.0 < dist < ignore_dist:
-                if dist < min_dist_detected: min_dist_detected = dist
-
-                force = K_wall / (dist ** 1.8)
-                force = min(1.0, force) 
-
-                angle_obs = angles[i]
-                push_angle = angle_obs + math.pi 
-                total_lat += force * math.sin(push_angle)
-
-        speed_factor = np.clip((min_dist_detected - critical_dist) / slow_down_threshold, 0.3, 1.0)
-        if aggressive: speed_factor = max(0.5, speed_factor)
-
-        return total_lat, speed_factor
 
     def low_battery(self) -> None:
         '''
@@ -279,17 +226,17 @@ class Pilot:
         rotation_cmd = KP_ROT * angle_error
         rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
 
-        # 3. Wall Avoidance
-        repulsion_rad, repulsion_orthor = self.repulsive_force()
-
-        if is_final_approach:
-            repulsion_orthor = 0.0          
-            repulsion_rad = 0.5
+        ## 3. Wall Avoidance
+        #repulsion_rad, repulsion_orthor = self.repulsive_force()
+#
+        #if is_final_approach:
+        #    repulsion_orthor = 0.0          
+        #    repulsion_rad = 0.5
 
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
 
-        forward_cmd = self.drone.MAX_SPEED * alignment_factor + repulsion_rad
+        forward_cmd = self.drone.MAX_SPEED * alignment_factor # + repulsion_rad
 
         if forward_cmd > 1: forward_cmd = 1
         elif forward_cmd < -1: forward_cmd = -1
@@ -308,17 +255,17 @@ class Pilot:
             if self.current_speed > 4.0: forward_cmd = -0.4 
 
         if is_reversing: forward_cmd = -forward_cmd
-        forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
 
-        if abs(angle_error) > 0.5 and not is_reversing:
-            repulsion_orthor += -0.5 * np.sign(angle_error)
+        #if abs(angle_error) > 0.5 and not is_reversing:
+        #    repulsion_orthor += -0.5 * np.sign(angle_error)
 
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
+            print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
-
-        return self.move_function(forward = forward_cmd, lateral = np.clip(repulsion_orthor, -1.0, 1.0), rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
+        print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
+        return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
