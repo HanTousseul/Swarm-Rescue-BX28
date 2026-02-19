@@ -19,6 +19,7 @@ class CommunicatorHandler:
         '''
 
         self.list_nearby_drones = []
+        self.list_vip_drones = [] # [NEW] Track drones carrying victims (Priority yielding)
         self.list_victims_taken_care_of = []
         self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
         if self.drone.communicator_is_disabled(): return
@@ -32,7 +33,12 @@ class CommunicatorHandler:
 
             drone_id = content['id']
 
-            self.list_nearby_drones.append(content['position'])
+            # [UPDATED] Separate drones based on their 'grasping' state
+            is_grasping = content.get('grasping', False)
+            if is_grasping:
+                self.list_vip_drones.append(content['position'])
+            else:
+                self.list_nearby_drones.append(content['position'])
 
             if content['victim_chosen'] is not None:
                 self.list_victims_taken_care_of.append(content['victim_chosen'])
@@ -58,25 +64,20 @@ class CommunicatorHandler:
         :return: None
         :rtype: None
         '''
-
+        OBSTACLE_THRESHOLD = 5.0
+        FREE_SPACE_THRESHOLD = -1.0
         for drone_id in range(10):
 
             obs_map = self.list_received_maps[drone_id]
             if obs_map is None:
                 continue
-            for y in range(len(obs_map)):
-                for x in range(len(obs_map[y])):
+            # Obstacle updates (received > current)
+            mask_obstacle = (obs_map > OBSTACLE_THRESHOLD) & (obs_map > self.drone.nav.obstacle_map.grid)
+            self.drone.nav.obstacle_map.grid[mask_obstacle] = obs_map[mask_obstacle]
 
-                    diff = obs_map[y][x] - self.drone.nav.obstacle_map.grid[y][x]
-
-                    if obs_map[y][x] > 5:
-
-                        if diff <= 0: continue
-                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
-
-                    elif obs_map[y][x] < -1:
-                        if diff >= 0: continue
-                        self.drone.nav.obstacle_map.grid[y][x] = obs_map[y][x]
+            # Free space updates (received < current, both negative)
+            mask_free = (obs_map < FREE_SPACE_THRESHOLD) & (obs_map < self.drone.nav.obstacle_map.grid)
+            self.drone.nav.obstacle_map.grid[mask_free] = obs_map[mask_free]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
         self.drone.nav.obstacle_map.update_cost_map()
