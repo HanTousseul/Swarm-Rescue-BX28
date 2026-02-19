@@ -19,6 +19,7 @@ class CommunicatorHandler:
         '''
 
         self.list_nearby_drones = []
+        self.list_vip_drones = [] # [NEW] Track drones carrying victims (Priority yielding)
         self.list_victims_taken_care_of = []
         self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
         if self.drone.communicator_is_disabled(): return
@@ -32,7 +33,12 @@ class CommunicatorHandler:
 
             drone_id = content['id']
 
-            self.list_nearby_drones.append(content['position'])
+            # [UPDATED] Separate drones based on their 'grasping' state
+            is_grasping = content.get('grasping', False)
+            if is_grasping:
+                self.list_vip_drones.append(content['position'])
+            else:
+                self.list_nearby_drones.append(content['position'])
 
             if content['victim_chosen'] is not None:
                 self.list_victims_taken_care_of.append(content['victim_chosen'])

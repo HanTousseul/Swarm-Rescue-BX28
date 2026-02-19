@@ -185,7 +185,8 @@ class Navigator:
                 
                 # Ngưỡng chặn: > 600 nghĩa là bắt đầu vào vùng nguy hiểm sát tường
                 # (Wall thật là > 2000, vùng đệm là 300-1000)
-                if cost > 800.0: 
+                cost_threshold = 800.0 if self.drone.state == 'EXPLORING' else 9000.0
+                if cost > cost_threshold: 
                     # print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
                     path_blocked = True
                     break
@@ -222,33 +223,36 @@ class Navigator:
                  self.current_astar_path = raw_path; self.last_path_index = 0
              else: self.current_astar_path = []
 
-        else: # EXPLORING
+        elif self.drone.state == 'RESCUING':
+            # 2. A* STRICTLY for Rescuing (Point-to-Point)
             self.replan_timer += 1
-            need_replan = False
-            if force_replan: need_replan = True
-            elif self.last_astar_target is None: need_replan = True
-            elif np.linalg.norm(final_target - self.last_astar_target) > 30.0: need_replan = True
-            elif len(self.current_astar_path) == 0: need_replan = True
-            elif self.replan_timer > 50: need_replan = True
-            
-            if self.drone.state == "EXPLORING" and len(self.current_astar_path) > 5 and not force_replan:
-                if self.last_astar_target is None or np.linalg.norm(final_target - self.last_astar_target) > 30.0:
-                    self.last_astar_target = final_target.copy()
-                need_replan = False
-
+            need_replan = force_replan or (self.last_astar_target is None) or \
+                          (np.linalg.norm(final_target - self.last_astar_target) > 30.0) or \
+                          (len(self.current_astar_path) == 0) or (self.replan_timer > 50)
+                          
             if need_replan:
                 self.replan_timer = 0
                 self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, final_target)
-                # Fallback: try finding path to a safe neighbor
                 if not self.current_astar_path:
                     safe_target = self.find_nearest_walkable(final_target, search_radius_grid=15)
                     if safe_target is not None:
                         self.current_astar_path = self.obstacle_map.find_path_astar(self.drone.estimated_pos, safe_target)
-                self.last_astar_target = final_target.copy(); self.last_path_index = 0
-                if not self.current_astar_path: self.failure_cooldown = 30; return None
+                self.last_astar_target = final_target.copy()
+                self.last_path_index = 0
+                if not self.current_astar_path: 
+                    self.failure_cooldown = 30
+                    return None
+
+        elif self.drone.state == 'EXPLORING':
+            # 3. EXPLORING -> NO PATHFINDING HERE!
+            # Driver already provided the path via Floodfill. 
+            # If the path is empty (because of Path Validation above or just failed), we return None.
+            if len(self.current_astar_path) == 0:
+                self.failure_cooldown = 30
+                return None
 
         if not self.current_astar_path: return final_target
-        if self.drone.state == 'RESCUING': LOOKAHEAD = 30.0 
+        if self.drone.state == 'RESCUING': LOOKAHEAD = 10.0 
         else: LOOKAHEAD = self.get_adaptive_lookahead() 
         
         # 5. Get Carrot

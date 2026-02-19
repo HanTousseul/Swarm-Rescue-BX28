@@ -220,7 +220,7 @@ class GridMap:
                         heapq.heappush(pq, (new_val, nx, ny))
 
     # [HEAVILY UPDATED] Smart Frontier Selection
-    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
+    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float, drone_id: int = 0) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
         """
         Dijkstra Flood Fill with Advanced Scoring:
         1. Distance Filter: Prefer targets > 150cm away (avoid short-sightedness).

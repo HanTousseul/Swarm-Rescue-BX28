@@ -60,9 +60,9 @@ class Pilot:
 
         if wounded.distance > grasp_distance:
             approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
-            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
+            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True)
 
-        return self.move_function(forward = 0.6, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
+        return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
     
     def calculate_repulsive_force(self):
         """Calculates repulsive force to avoid colliding with other drones."""
@@ -157,7 +157,7 @@ class Pilot:
             if lidar_data[elt] < 220:
                 if lidar_data[elt] == 0: lidar_data[elt] = 0.1
 
-                force = 1 / lidar_data[elt] ** 2 
+                force = 1 / (lidar_data[elt] ** 2)
                 unit_vector_angle = ray_angles[elt] + math.pi
 
                 total_rad_repulsion += force * np.cos(unit_vector_angle)
@@ -175,7 +175,7 @@ class Pilot:
             if elt.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
 
                 if elt.distance == 0: force = 100
-                else: force = 4/elt.distance ** 2
+                else: force = 4/(elt.distance ** 2)
      
                 unit_vector_angle = elt.angle + math.pi
 
@@ -190,8 +190,6 @@ class Pilot:
 
         total_rad_repulsion *= total_correction_norm / actual_norm_correction
         total_orthor_repulsion *= total_correction_norm / actual_norm_correction
-
-        print(total_rad_repulsion, total_orthor_repulsion)
 
         return (total_rad_repulsion, total_orthor_repulsion)
 

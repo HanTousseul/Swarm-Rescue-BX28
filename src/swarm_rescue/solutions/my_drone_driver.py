@@ -65,17 +65,20 @@ class MyStatefulDrone(DroneAbstract):
         
         # Counts consecutive pathfinding failures to implement "Patience" before blacklisting
         self.path_fail_count = 0 
-
-        # CONSTANTS 
         self.STUCK_TIME_EXPLORING = 50 #(timestep)
         self.STUCK_TIME_OTHER = 70 #(timestep)
         self.MAX_SPEED = 0.9 #in [0,1]
         self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+        self.floodfill_cooldown = 0
+        # [NEW] Counter for map completion
+        self.no_frontier_patience = 0
 
     def control(self) -> CommandsDict:
         """
         Main control loop called by the simulator every step.
         """
+        
+        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
         
         self.cnt_timestep += 1
         
@@ -183,8 +186,12 @@ class MyStatefulDrone(DroneAbstract):
 
             # 2. Find Frontier (Exploration)
             if self.state == "EXPLORING": 
-                # If current target is None (Arrived, Blocked, or Started)
-                if self.current_target is None:
+                # [NEW] Decrease cooldown timer
+                if self.floodfill_cooldown > 0:
+                    self.floodfill_cooldown -= 1
+                
+                # [UPDATED] Only search for new target if cooldown is over
+                if self.current_target is None and self.floodfill_cooldown <= 0:
                     frontier, path = self.nav.obstacle_map.get_reachable_frontier_and_path(self.estimated_pos, self.estimated_angle)
                     
                     if frontier is not None:
@@ -198,6 +205,7 @@ class MyStatefulDrone(DroneAbstract):
                             self.nav.last_path_index = 0
                             self.nav.last_astar_target = frontier.copy() 
                             self.path_fail_count = 0
+                            self.no_frontier_patience = 0
                         else: self.current_target = None
                     
                     if self.current_target is None:
@@ -207,6 +215,16 @@ class MyStatefulDrone(DroneAbstract):
                     if self.current_target is None:
                         self.current_target = self.nav.obstacle_map.get_random_free_target(self.estimated_pos)
                         self.path_fail_count = 0
+                        self.no_frontier_patience += 1
+                        print(f'[{self.identifier}] Counting patience to determine full map!')
+
+                        if self.no_frontier_patience >= 3:
+                            print(f"[{self.identifier}] 🌍 MAP FULLY EXPLORED! Returning to base.")
+                            self.state = "RETURNING"
+                            self.nav.current_astar_path = []
+                            self.current_target = self.initial_position
+                            return {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": 0}
+                            
                         if self.current_target is None:
                             return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0.8, grasper = 0, repulsive_force_bool = True)
 
@@ -219,6 +237,8 @@ class MyStatefulDrone(DroneAbstract):
 
             if semantic_data:
                 for data in semantic_data:
+                    # if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
+                    #     print(f'Debug type: {data.entity_type}, grasped: {data.grasped}!')
                     if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and not data.grasped:
                         angle_global = self.estimated_angle + data.angle
                         best_safe_dist = 20.0 
@@ -260,12 +280,20 @@ class MyStatefulDrone(DroneAbstract):
         elif self.state == "DROPPING":
             self.current_target = self.rescue_center_pos
             if check_center: self.drop_step += 1
+            
             if self.drop_step > 150 or not self.grasped_wounded_persons(): 
-                print(f"[{self.identifier}] ⏬ DROPPED. Resume Exploring.")
                 self.drop_step = 0
                 self.nav.current_astar_path = []
-                self.state = "EXPLORING" 
                 self.current_target = None
+                
+                # Check if it returns home because it's done full map
+                if self.no_frontier_patience >= 3:
+                    print(f"[{self.identifier}] 🛌 MAP DONE. Resting at base.")
+                    self.state = "END_GAME" # Rest
+                else:
+                    print(f"[{self.identifier}] ⏬ DROPPED. Resume Exploring.")
+                    self.state = "EXPLORING" # Continue exploring
+                    
                 return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
             return self.pilot.move_to_target_carrot()
 
@@ -293,8 +321,7 @@ class MyStatefulDrone(DroneAbstract):
                     if self.path_fail_count > 30:
                         print(f"[{self.identifier}] ❌ Path failed.")
                         
-                        # [FIX 1] Chỉ Blacklist nếu KHÔNG PHẢI đang về nhà
-                        # Nếu đang RETURNING, ta không muốn blacklist cái Home.
+                        # Only blaclist if not returning
                         if self.state != "RETURNING":
                             print("   -> Blacklisting target.")
                             self.blacklisted_targets.append(self.current_target)
@@ -303,10 +330,10 @@ class MyStatefulDrone(DroneAbstract):
                         self.current_target = None
                         self.path_fail_count = 0
                         
-                        # [FIX 2] Kiểm tra Grasper state để không làm rơi nạn nhân
+                        # Check grasper
                         keep_grasping = 1 if self.grasped_wounded_persons() else 0
                         
-                        # Xoay người để thoát kẹt, nhưng vẫn giữ victim
+                        # Turn to unstuck
                         return self.pilot.move_function(forward = 0, lateral = 0, rotation = 1.0, grasper = keep_grasping, repulsive_force_bool = True)
                 else:
                     self.path_fail_count = 0
@@ -324,18 +351,36 @@ class MyStatefulDrone(DroneAbstract):
             # 1. Check if we arrived close enough
             arrived_close = (dist_to_target < 35.0)
             
-            # 2. Check if the target point has become obstructed (Wall appeared)
+            # 2. Get cell value at the target position
             gx, gy = self.nav.obstacle_map.world_to_grid(self.current_target[0], self.current_target[1])
             cell_value = 0.0
             if 0 <= gx < self.nav.obstacle_map.grid_w and 0 <= gy < self.nav.obstacle_map.grid_h:
                 cell_value = self.nav.obstacle_map.grid[gy, gx]
+            
+            # Obstacle check (Wall appeared)
             target_obstructed = (cell_value > 10.0)
             
-            # 3. Check if Navigator invalidated path (next_waypoint is None)
-            path_invalid = (next_waypoint is None)
+            # [NEW] 2.5. Check for Stale Target (Area already explored by teammates)
+            # Instead of checking just the target cell (which is always FREE),
+            # we check a 5x5 window around the target.
+            # If there are NO unknown cells left in this window, the frontier is stale.
+            target_stale = True
+            search_radius = 2 # 5x5 window
+            for dy in range(-search_radius, search_radius + 1):
+                for dx in range(-search_radius, search_radius + 1):
+                    ny, nx = gy + dy, gx + dx
+                    if 0 <= nx < self.nav.obstacle_map.grid_w and 0 <= ny < self.nav.obstacle_map.grid_h:
+                        val = self.nav.obstacle_map.grid[ny, nx]
+                        # If we find at least one UNKNOWN cell (-5.0 to 5.0), it's still a valid frontier
+                        if -5.0 < val < 5.0: 
+                            target_stale = False
+                            break
+                if not target_stale:
+                    break
 
-            if arrived_close or target_obstructed or path_invalid:
-                # print(f"[{self.identifier}] Target Done/Invalid (Obs:{target_obstructed}). Resetting.")
+            # Trigger reset if any condition is met
+            if arrived_close or target_obstructed or target_stale:
+                # print(f"[{self.identifier}] Target Done/Invalid/Stale (Obs:{target_obstructed}, Stale:{target_stale}). Resetting.")
                 self.current_target = None
                 self.nav.current_astar_path = []
                 if self.grasped_wounded_persons(): grasper = 1
@@ -353,16 +398,31 @@ class MyStatefulDrone(DroneAbstract):
                          if np.linalg.norm(self.current_target - self.initial_position) > 10.0:
                              self.current_target = self.initial_position
                              return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 1, repulsive_force_bool = True)
-                         
                     if self.grasped_wounded_persons(): grasped = 1
                     else: grasped = 0
-                    return self.pilot.move_function(forward = 0, lateral = 1, rotation = 0.5, grasper = grasped)
+                    return self.pilot.move_function(forward = 0, lateral = 1, rotation = 0.5, grasper = grasped, repulsive_force_bool = True)
 
+        # [NEW] FAST UNSTUCK & PATH FAILURE HANDLING
         if next_waypoint is None:
-            print(f'[{self.identifier}] No next waypoint {self.estimated_pos}')
-            if self.grasped_wounded_persons(): grasper = 1
-            else: grasper = 0
+            grasper = 1 if self.grasped_wounded_persons() else 0
             
+            # If Exploring, trigger cooldown so it doesn't instantly lag CPU with Flood Fill
+            if self.state == "EXPLORING" and self.current_target is None:
+                self.floodfill_cooldown = 15 # Wait 15 ticks before thinking again
+                self.current_target = None
+                self.nav.current_astar_path = []
+            
+            # 1. Check Lidar for walls
+            lidar_data = self.lidar_values()
+            if lidar_data is not None:
+                min_dist = min(lidar_data)
+                
+                # 2. If stuck near a wall (in the high cost inflation zone, < 60px)
+                if min_dist < 60.0:
+
+                    return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0.8, grasper = grasper, repulsive_force_bool = True)
+            
+            # Fallback if no wall is nearby (stuck for other reasons)
             return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
         
         # Execute Pilot Command
