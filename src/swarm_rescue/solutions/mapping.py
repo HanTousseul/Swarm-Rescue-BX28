@@ -33,7 +33,7 @@ class GridMap:
         
         self.cost_map = None
         self.dijkstra_grid = None
-
+        self.panic_mode = False 
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """Converts world coordinates (cm) to grid indices (x, y)."""
         gx = int((x + self.offset_x) / self.resolution)
@@ -115,16 +115,16 @@ class GridMap:
         eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
         self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
-        SAFETY_WEIGHT = 60.0 
+        SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
         # Calculate cost: Inversely proportional to distance from obstacles
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
         # Penalize Unknown areas slightly to encourage exploring free space
-        ROBOT_RADIUS_GRID = 3.0 
+        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 3.0
         self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
 
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
-        UNKNOWN_PENALTY = 100.0 
+        UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
         self.cost_map[self.grid > 20.0] = 9999.0
 
@@ -218,7 +218,8 @@ class GridMap:
                     step_risk = self.cost_map[ny, nx] 
                     # [NEW] Massive penalty for UNKNOWN space to force Dijkstra to stay in VAL_FREE
                     if -1.0 < self.grid[ny, nx] <= 20.0:
-                        step_risk += 5000.0
+                        penalty = 50.0 if self.panic_mode else 5000.0
+                        step_risk += penalty
                     if step_risk >= 9999.0: continue
                     new_val = curr_val + (dist_w * step_risk)
                     if new_val < self.dijkstra_grid[ny, nx]:
@@ -472,15 +473,3 @@ class GridMap:
         display_img = cv2.resize(heatmap_img, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
         display_img = cv2.flip(display_img, 0) 
         cv2.imshow(window_name, display_img); cv2.waitKey(1)
-    
-    def mask_rescue_center(self, center_pos: np.ndarray):
-        """Hard-masks the Rescue Center area as FREE to prevent generating frontiers inside walls."""
-        if center_pos is None: return
-        RC_WIDTH = 200.0; RC_HEIGHT = 300.0
-        cx, cy = self.world_to_grid(center_pos[0], center_pos[1])
-        w_grid = int((RC_WIDTH / 2) / self.resolution) + 2
-        h_grid = int((RC_HEIGHT / 2) / self.resolution) + 2
-        y_min = max(0, cy - h_grid); y_max = min(self.grid_h, cy + h_grid)
-        x_min = max(0, cx - w_grid); x_max = min(self.grid_w, cx + w_grid)
-        mask_area = self.grid[y_min:y_max, x_min:x_max]
-        self.grid[y_min:y_max, x_min:x_max] = np.where(mask_area < 10.0, -50.0, mask_area)

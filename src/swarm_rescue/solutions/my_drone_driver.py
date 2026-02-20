@@ -60,7 +60,6 @@ class MyStatefulDrone(DroneAbstract):
         
         # Anti-stuck & Logic Variables
         self.pos_history_long = []
-        self.rescue_center_masked = False
         self.patience = 0
         self.blacklisted_targets = []
         self.blacklist_timer = 0
@@ -72,6 +71,8 @@ class MyStatefulDrone(DroneAbstract):
         # [NEW] Counter for map completion
         self.no_frontier_patience = 0
         self.preferred_angle = None
+        self.safe_dispersion_reached_tick = None
+        self.panic_timer = 0
 
     def control(self) -> CommandsDict:
         """
@@ -116,12 +117,6 @@ class MyStatefulDrone(DroneAbstract):
                         tmp = dist_to_center
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
-        # Mask Rescue Center on map to prevent exploring inside walls
-        if not self.rescue_center_masked and self.rescue_center_pos is not None:
-            self.nav.obstacle_map.mask_rescue_center(self.rescue_center_pos)
-            self.rescue_center_masked = True
-            print(f"[{self.identifier}] 🚫 Masked Rescue Center.")
-
         # Debug visualization
         if self.cnt_timestep % 5 == 0:
             self.nav.obstacle_map.display(
@@ -139,8 +134,21 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- STATE: DISPERSING ---
         if self.state == "DISPERSING":
-            # 1. Repulsive force
-            if self.cnt_timestep < 50:
+            # Initialize a memory variable to track when safe distance is reached
+                
+            dx = self.estimated_pos[0] - self.initial_position[0]
+            dy = self.estimated_pos[1] - self.initial_position[1]
+            dist_moved = math.hypot(dx, dy)
+            
+            # Check if we have fulfilled the escape conditions
+            if self.safe_dispersion_reached_tick is None:
+                # Condition: Run for at least 50 ticks AND exceed 150px safe distance.
+                # Safety Timeout: Force escape at 200 ticks to prevent infinite deadlock.
+                if (self.cnt_timestep >= 50 and dist_moved >= 150.0) or self.cnt_timestep >= 200:
+                    self.safe_dispersion_reached_tick = self.cnt_timestep
+            
+            # 1. Active Repulsion: Push away from peers, walls, and Rescue Center
+            if self.safe_dispersion_reached_tick is None:
                 forward, lateral = self.pilot.repulsive_force()
                 return {
                     "forward": float(np.clip(forward, -1.0, 1.0)), 
@@ -149,38 +157,55 @@ class MyStatefulDrone(DroneAbstract):
                     "grasper": 0
                 }
             
-            # 2. Turn to scan map
-            elif self.cnt_timestep < 100: 
+            # 2. Scanning Mode: Spin to map surroundings (Rescue Center) with Lidar
+            elif self.cnt_timestep < self.safe_dispersion_reached_tick + 50: 
                 return {"forward": 0.0, "lateral": 0.0, "rotation": 1.0, "grasper": 0}
             
-            # 3. Prefered angle is decide by how its push by repulsive force
+            # 3. Lock Natural Escape Angle & Transition to Exploring
             else:
-                dx = self.estimated_pos[0] - self.initial_position[0]
-                dy = self.estimated_pos[1] - self.initial_position[1]
-                dist_moved = math.hypot(dx, dy)
-                
                 if dist_moved > 5.0:
                     self.preferred_angle = math.atan2(dy, dx)
-                else:
+                else: 
                     self.preferred_angle = self.estimated_angle
                     
                 deg_angle = math.degrees(self.preferred_angle)
-                print(f"[{self.identifier}] 🚀 WARMUP DONE. Natural Angle: {deg_angle:.1f}°. EXPLORING!")
+                print(f"[{self.identifier}] 🚀 WARMUP DONE. Dist: {dist_moved:.1f}px. Angle: {deg_angle:.1f}°. EXPLORING!")
                 self.state = "EXPLORING"
         # --- BATTERY GUARD ---
         steps_remaining = self.max_timesteps - self.cnt_timestep
         # print(steps_remaining)
         self.pilot.low_battery(steps_remaining, RETURN_TRIGGER_STEPS)
 
-        # --- ANTI-STUCK ---
-        # Checks if position hasn't changed significantly over a time window.
-        if self.nav.is_stuck(steps_remaining, RETURN_TRIGGER_STEPS, STUCK_TIME_EXPLORING, STUCK_TIME_OTHER):
+        # --- ANTI-STUCK & PANIC MODE ---
+        is_currently_stuck = self.nav.is_stuck(steps_remaining, RETURN_TRIGGER_STEPS, STUCK_TIME_EXPLORING, STUCK_TIME_OTHER)
+
+        if self.state != "END_GAME":
+            # Kích hoạt bộ đếm Panic nếu bị kẹt hoặc tuyệt vọng vì hết map
+            if is_currently_stuck:
+                self.panic_timer = 80 # Cấp 80 tick để lách qua kẹt
+            elif self.state == "EXPLORING" and self.no_frontier_patience > 10:
+                self.panic_timer = 80
+                self.no_frontier_patience = 0 # Tránh cộng dồn báo động giả
+                
+        # Đồng bộ trạng thái hoảng loạn xuống hệ thống Mapping
+        if self.panic_timer > 0:
+            self.panic_timer -= 1
+            if not getattr(self.nav.obstacle_map, 'panic_mode', False):
+                self.nav.obstacle_map.panic_mode = True
+                self.nav.obstacle_map.update_cost_map() # [QUAN TRỌNG] Ép tạo lại map tức thì!
+                print(f"[{self.identifier}] 🚨 PANIC MODE ON: Flattening Cost Map to escape narrow corridor!")
+        else:
+            if getattr(self.nav.obstacle_map, 'panic_mode', False):
+                self.nav.obstacle_map.panic_mode = False
+                self.nav.obstacle_map.update_cost_map() # Khôi phục lại bản đồ an toàn
+                print(f"[{self.identifier}] 😌 Panic Mode OFF: Normal navigation resumed.")
+
+        # Xử lý giãy giụa khi kẹt
+        if is_currently_stuck:
             self.nav.current_astar_path = []
             
-            # [NEW STRATEGY] Wall Repulsion Unstuck
-            # 1. Tính lực đẩy từ tường (dùng mode aggressive để lực mạnh hơn)
-            radial,orthoradial = self.pilot.repulsive_force()
-            
+            # Wall Repulsion Unstuck
+            radial, orthoradial = self.pilot.repulsive_force()
             grasper = 1 if self.grasped_wounded_persons() else 0
             return {
                 "forward": float(np.clip(radial, -1.0, 1.0)), 

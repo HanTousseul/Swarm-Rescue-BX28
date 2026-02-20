@@ -169,24 +169,35 @@ class Pilot:
         semantic_data = self.drone.semantic_values()
         ray_angles = self.drone.lidar_rays_angles()
 
-        for elt in range (180):
+        for elt in range (len(lidar_data)):
 
             if lidar_data[elt] < 90:
 
-                force = 1 / lidar_data[elt] ** 2 
+                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 1
+                force = WALL_CONSTANT / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
 
                 total_rad_repulsion += force * np.cos(unit_vector_angle)
                 total_orthor_repulsion += force *np.sin(unit_vector_angle)
 
-        for elt in semantic_data:
-
-            if (elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and self.drone.state == 'RESCUING') or (self.drone.state == 'RETURNING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER):
-
-                force = 1/10
-
-                total_rad_repulsion += force * np.cos(elt.angle)
-                total_orthor_repulsion += force *np.sin(elt.angle)
+        # 2. SEMANTIC ENTITIES AVOIDANCE & ATTRACTION
+        if semantic_data is not None:
+            for elt in semantic_data:
+                
+                # A. ATTRACTION LOGIC: Pull towards wounded (Rescuing) or Base (Returning)
+                if (elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and self.drone.state == 'RESCUING') or \
+                   (self.drone.state == 'RETURNING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER):
+                    force = 0.1 # 1/10
+                    total_rad_repulsion += force * np.cos(elt.angle)
+                    total_orthor_repulsion += force * np.sin(elt.angle)
+                
+                # B. [NEW] REPULSION LOGIC: Push away from Rescue Center during warmup
+                elif self.drone.state == 'DISPERSING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER:
+                    dist = max(elt.distance, 1.0)
+                    force = 3000.0 / (dist ** 2) # Strong repulsive force to clear the base
+                    push_angle = elt.angle + math.pi # Point in the opposite direction
+                    total_rad_repulsion += force * np.cos(push_angle)
+                    total_orthor_repulsion += force * np.sin(push_angle)
 
         #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
         #total_rad_repulsion = min(0.7, total_rad_repulsion)
