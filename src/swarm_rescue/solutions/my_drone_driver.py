@@ -75,11 +75,14 @@ class MyStatefulDrone(DroneAbstract):
         self.safe_dispersion_reached_tick = None
         self.panic_timer = 0
 
+    def draw_top_layer(self):
+        self.draw_identifier()
+
     def control(self) -> CommandsDict:
         """
         Main control loop called by the simulator every step.
         """
-        
+        self.draw_top_layer()
         self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
         
         self.cnt_timestep += 1
