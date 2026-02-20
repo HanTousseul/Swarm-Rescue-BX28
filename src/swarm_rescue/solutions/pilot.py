@@ -145,13 +145,11 @@ class Pilot:
         '''
 
         if steps_remaining <= RETURN_TRIGGER_STEPS:
-            if not self.drone.grasped_wounded_persons():
-                if self.drone.is_inside_return_area: self.drone.state = "END_GAME"
-            else:
-                if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                    print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
-                    self.drone.state = "RETURNING"
-                    self.drone.current_target = None 
+            if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
+                print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
+                self.drone.state = "RETURNING"
+                self.drone.current_target = None
+            if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
 
 
     def repulsive_force(self, total_correction_norm:float = 0.7) -> tuple:
@@ -249,15 +247,19 @@ class Pilot:
                     normal_relative.append((dist, angle_local))
 
         # C. Apply Forces based on Social Hierarchy
-        K_DRONE = 500.0 # Base repulsion constant
+        K_DRONE = 1000 if self.drone.state == 'DISPERSING' else 200 # Base repulsion constant
+        # if self.drone.state == 'DISPERSING': print(K_DRONE)
         
         # Normal Drones pushing us
         if not am_i_vip: 
             # VIP ignores normal drones completely, straight path home!
             for dist, angle in normal_relative:
                 if dist < 200.0: 
+                    dist = max(dist, 1)
                     force = K_DRONE / (dist ** 2)
                     push_angle = normalize_angle(angle + math.pi)
+                    if abs(angle) < 0.3 or abs(normalize_angle(angle - math.pi)) < 0.3:
+                        push_angle += 0.5
                     total_rad_repulsion += force * np.cos(push_angle)
                     total_orthor_repulsion += force * np.sin(push_angle)
 
@@ -266,22 +268,28 @@ class Pilot:
             if dist < 250.0:
                 if am_i_vip:
                     # VIP vs VIP: Normal symmetric push to resolve deadlocks
+                    dist = max(dist, 1)
                     force = K_DRONE / (dist ** 2)
                 else:
                     # Normal vs VIP: HUGE PUSH. Normal drone yields heavily.
+                    dist = max(dist, 1)
                     force = (K_DRONE * 5.0) / (dist ** 2)
                     # Add a slight backward brake to yield effectively
                     total_rad_repulsion -= 0.5 * force 
                 
                 push_angle = normalize_angle(angle + math.pi)
+                if abs(angle) < 0.3 or abs(normalize_angle(angle - math.pi)) < 0.3:
+                        push_angle += 0.5
                 total_rad_repulsion += force * np.cos(push_angle)
                 total_orthor_repulsion += force * np.sin(push_angle)
 
         actual_norm_correction = math.hypot(total_rad_repulsion,total_orthor_repulsion)
         if actual_norm_correction < 0.001: return 0,0
 
-        total_rad_repulsion *= total_correction_norm / actual_norm_correction
-        total_orthor_repulsion *= total_correction_norm / actual_norm_correction
+        MAX_REPULSION = 1.5
+        if actual_norm_correction > MAX_REPULSION:
+            total_rad_repulsion *= MAX_REPULSION / actual_norm_correction
+            total_orthor_repulsion *= MAX_REPULSION / actual_norm_correction
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
@@ -296,7 +304,12 @@ class Pilot:
         :rtype: CommandsDict
         '''
         forward, lateral = self.repulsive_force(total_correction_norm = 0.2) # soft movement
-        return {"forward": forward, "lateral": lateral, "rotation": 0.0, "grasper":grasper}
+        return {
+            "forward": float(np.clip(forward, -1.0, 1.0)), 
+            "lateral": float(np.clip(lateral, -1.0, 1.0)), 
+            "rotation": 0.0, 
+            "grasper": int(grasper)
+        }
 
     def move_to_target_carrot(self, MAX_SPEED: float) -> CommandsDict:
         '''
@@ -359,23 +372,16 @@ class Pilot:
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
 
-        forward_cmd = MAX_SPEED * alignment_factor + repulsion_rad
-
-        if forward_cmd > 1: forward_cmd = 1
-        elif forward_cmd < -1: forward_cmd = -1
-
         # 5. Active Braking & Approach
         BRAKE_DIST = 120.0 
         if dist_to_target < BRAKE_DIST:
-            # [CRITICAL]: Never allow speed to drop to 0.0 unless ON the target
-            # Keep at least 0.15 to "nudge" closer or push through soft collisions.
-            forward_cmd = max(0.15, dist_to_target * 0.03) 
-
-            # Apply alignment factor to slow down further if turning sharply
-            forward_cmd *= alignment_factor
-
-            # Reverse braking only if too fast
-            if self.current_speed > 4.0: forward_cmd = -0.4 
+            base_forward = max(0.15, dist_to_target * 0.03) 
+            base_forward *= alignment_factor
+            if self.current_speed > 4.0: base_forward = -0.4 
+        else:
+            base_forward = MAX_SPEED * alignment_factor
+        
+        forward_cmd = base_forward + repulsion_rad
 
         if is_reversing: forward_cmd = -forward_cmd
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
@@ -392,8 +398,8 @@ class Pilot:
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
 
         return {
-            "forward": forward_cmd,
-            "lateral": np.clip(repulsion_orthor, -1.0, 1.0),
-            "rotation": rotation_cmd,
-            "grasper": grasper_val
+            "forward": float(forward_cmd),
+            "lateral": float(np.clip(repulsion_orthor, -1.0, 1.0)),
+            "rotation": float(rotation_cmd),
+            "grasper": int(grasper_val)
         }

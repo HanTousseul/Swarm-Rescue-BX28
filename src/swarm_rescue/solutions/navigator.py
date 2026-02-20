@@ -193,9 +193,9 @@ class Navigator:
                 
                 # Ngưỡng chặn: > 600 nghĩa là bắt đầu vào vùng nguy hiểm sát tường
                 # (Wall thật là > 2000, vùng đệm là 300-1000)
-                cost_threshold = 800.0 if self.drone.state == 'EXPLORING' else 9000.0
+                cost_threshold = 8000.0 if self.drone.state == 'EXPLORING' else 9000.0
                 if cost > cost_threshold: 
-                    # print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
+                    print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
                     path_blocked = True
                     break
             
@@ -248,7 +248,7 @@ class Navigator:
                 self.last_astar_target = final_target.copy()
                 self.last_path_index = 0
                 if not self.current_astar_path: 
-                    self.failure_cooldown = 30
+                    # self.failure_cooldown = 30
                     return None
 
         elif self.drone.state == 'EXPLORING':
