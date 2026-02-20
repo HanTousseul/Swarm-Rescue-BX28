@@ -33,7 +33,7 @@ class GridMap:
         
         self.cost_map = None
         self.dijkstra_grid = None
-
+        self.panic_mode = False 
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """Converts world coordinates (cm) to grid indices (x, y)."""
         gx = int((x + self.offset_x) / self.resolution)
@@ -115,16 +115,16 @@ class GridMap:
         eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
         self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
-        SAFETY_WEIGHT = 300.0 
+        SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
         # Calculate cost: Inversely proportional to distance from obstacles
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
         # Penalize Unknown areas slightly to encourage exploring free space
-        ROBOT_RADIUS_GRID = 3.0 
+        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 3.0
         self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
 
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
-        UNKNOWN_PENALTY = 100.0 
+        UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
         self.cost_map[self.grid > 20.0] = 9999.0
 
@@ -178,6 +178,9 @@ class GridMap:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
                     cell_cost = self.cost_map[ny, nx]
+                    # [NEW] Massive penalty for UNKNOWN space to force A* to stay in VAL_FREE
+                    if -1.0 < self.grid[ny, nx] <= 20.0:
+                        cell_cost += 5000.0
                     if cell_cost >= 9000.0: continue 
                     new_g = g_score[(cx, cy)] + (move_cost * cell_cost)
                     if (nx, ny) not in g_score or new_g < g_score[(nx, ny)]:
@@ -213,19 +216,24 @@ class GridMap:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
                     step_risk = self.cost_map[ny, nx] 
+                    # [NEW] Massive penalty for UNKNOWN space to force Dijkstra to stay in VAL_FREE
+                    if -1.0 < self.grid[ny, nx] <= 20.0:
+                        penalty = 50.0 if self.panic_mode else 5000.0
+                        step_risk += penalty
                     if step_risk >= 9999.0: continue
                     new_val = curr_val + (dist_w * step_risk)
                     if new_val < self.dijkstra_grid[ny, nx]:
                         self.dijkstra_grid[ny, nx] = new_val
                         heapq.heappush(pq, (new_val, nx, ny))
 
-    # [HEAVILY UPDATED] Smart Frontier Selection
-    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
+    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float, preferred_angle: float = 0.0, initial_pos: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
         """
         Dijkstra Flood Fill with Advanced Scoring:
         1. Distance Filter: Prefer targets > 150cm away (avoid short-sightedness).
         2. Density Score: Prefer areas with MORE unknown cells (Information Gain).
-        3. Fallback: If no far targets, accept close ones.
+        3. Directional Bias: Heavily penalize targets that deviate from the preferred_angle.
+           The penalty decays as the drone moves further from its initial position.
+        4. Fallback: If no far targets, accept close ones.
         """
         start_gx, start_gy = self.world_to_grid(drone_pos[0], drone_pos[1])
         
@@ -250,7 +258,9 @@ class GridMap:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
                     # Neighbor is Unknown?
-                    if -5.0 < self.grid[ny, nx] < 5.0: 
+                    # Strict frontier definition: only true unknown (>=0.0) or soft walls (<5.0)
+                    # Excludes cleared trajectory (-2.0) and lidar-cleared space (-0.5)
+                    if -0.1 < self.grid[ny, nx] < 5.0: 
                         is_frontier = True
                         break
             
@@ -262,31 +272,30 @@ class GridMap:
                 nx, ny = cx + dx, cy + dy
                 if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
                     
-                    # [LOOSEN MAP LOGIC] - Nới lỏng điều kiện
-                    # 1. Kiểm tra xem ô này có phải là đất sạch không?
-                    is_free_space = (self.grid[ny, nx] < -1.0)
+                    # 1. Check if the cell is free space (trajectory or lidar cleared)
+                    is_free_space = (self.grid[ny, nx] < -0.2)
                     
-                    # 2. Kiểm tra xem ô này có nằm gần vị trí bắt đầu không? (Bán kính ~15 grid = 1.2m)
-                    # Nếu đang ở gần, cho phép đi qua cả Unknown (để thoát kẹt)
+                    # 2. Check if the cell is near the starting position (Radius ~15 grid = 1.2m)
+                    # If nearby, allow passing through Unknown to escape deadlocks
                     dist_sq_from_start = (nx - start_gx)**2 + (ny - start_gy)**2
                     is_near_start = (dist_sq_from_start < 225) # 15^2
                     
-                    # LUẬT: Chỉ đi nếu là Đất Sạch HOẶC Đang ở gần (và không phải tường cứng)
+                    # RULE: Only traverse if it's Free Space OR Near Start (and not a hard wall)
                     if not is_free_space:
-                        # Nếu không phải đất sạch, chỉ cho phép đi nếu ở gần start
                         if not is_near_start:
                             continue
-                        # Nếu ở gần start, nhưng là tường cứng (> 20.0) thì vẫn cấm
                         if self.grid[ny, nx] > 20.0:
                             continue
 
-                    # Lấy Cost từ CostMap (nếu có)
+                    # Get Cost from CostMap (if available)
                     cell_risk = 1.0
                     if self.cost_map is not None:
                         cell_risk = self.cost_map[ny, nx]
+                        if cell_risk < 9999.0:
+                            # Soften the wall penalty slightly for Floodfill to allow squeezing through gaps
+                            cell_risk = 1.0 + (cell_risk / 10.0)
                     
-                    # Nới lỏng ngưỡng chặn tường một chút (từ 9999 xuống 20000 để chắc chắn)
-                    # Nhưng quan trọng: Nếu đang ở vùng nguy hiểm (Cost cao), vẫn cho đi qua để tìm đường thoát
+                    # Block traversal if hitting the core of an obstacle (unless near start to un-stuck)
                     if cell_risk >= 9999.0 and not is_near_start: 
                         continue 
                     
@@ -321,21 +330,46 @@ class GridMap:
         if not filtered_candidates:
             filtered_candidates = frontier_candidates
 
-        # Second Pass: Score Calculation (Travel Cost vs Information Gain)
+        # Second Pass: Score Calculation (Travel Cost vs Information Gain vs Directional Bias)
         for cost, gx, gy in filtered_candidates:
-            # Calculate Unknown Density
+            # 1. Calculate Unknown Density
             unknown_count = 0
             for dy in range(-DENSITY_RADIUS, DENSITY_RADIUS+1):
                 for dx in range(-DENSITY_RADIUS, DENSITY_RADIUS+1):
                     nx, ny = gx + dx, gy + dy
                     if 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
-                        if -5.0 < self.grid[ny, nx] < 5.0:
+                        if -0.1 < self.grid[ny, nx] < 5.0:
                             unknown_count += 1
+
+            # 2. Calculate Directional Bias Penalty
+            wx, wy = self.grid_to_world(gx, gy)
+            angle_to_frontier = math.atan2(wy - drone_pos[1], wx - drone_pos[0])
+            
+            # Find the shortest angular difference [-pi, pi]
+            angle_diff = angle_to_frontier - preferred_angle
+            while angle_diff > math.pi: angle_diff -= 2 * math.pi
+            while angle_diff < -math.pi: angle_diff += 2 * math.pi
+            abs_angle_diff = abs(angle_diff)
+            
+            # --- DISTANCE-BASED DECAY LOGIC ---
+            dist_from_start = 0.0
+            if initial_pos is not None:
+                dist_from_start = math.hypot(drone_pos[0] - initial_pos[0], drone_pos[1] - initial_pos[1])
+            
+            # Decay factor: From 100% penalty at 0px down to 0% at 600px.
+            # Allows the drone to become fully autonomous and free once it has dispersed far enough.
+            decay_factor = max(0.0, 1.0 - (dist_from_start / 600.0))
+            
+            # Apply decay to the base weight
+            BASE_WEIGHT = 800.0 
+            DIRECTION_PENALTY_WEIGHT = BASE_WEIGHT * decay_factor
+            
+            # Penalty is exponentially higher for larger deviations (squared)
+            direction_penalty = (abs_angle_diff ** 2) * DIRECTION_PENALTY_WEIGHT
             
             # Score Formula: Lower is better
-            # Score = Travel Cost - (Unknown Density * Reward)
-            # If density is high, score drops (maybe even negative), making it very attractive.
-            score = cost - (unknown_count * DENSITY_REWARD)
+            # Base Cost - Density Reward + Angle Penalty
+            score = cost - (unknown_count * DENSITY_REWARD) + direction_penalty
             
             if score < min_score:
                 min_score = score
@@ -439,14 +473,3 @@ class GridMap:
         display_img = cv2.resize(heatmap_img, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
         display_img = cv2.flip(display_img, 0) 
         cv2.imshow(window_name, display_img); cv2.waitKey(1)
-    
-    def mask_rescue_center(self, center_pos: np.ndarray):
-        """Hard-masks the Rescue Center area as FREE to prevent generating frontiers inside walls."""
-        if center_pos is None: return
-        RC_WIDTH = 150.0; RC_HEIGHT = 260.0
-        cx, cy = self.world_to_grid(center_pos[0], center_pos[1])
-        w_grid = int((RC_WIDTH / 2) / self.resolution) + 2
-        h_grid = int((RC_HEIGHT / 2) / self.resolution) + 2
-        y_min = max(0, cy - h_grid); y_max = min(self.grid_h, cy + h_grid)
-        x_min = max(0, cx - w_grid); x_max = min(self.grid_w, cx + w_grid)
-        self.grid[y_min:y_max, x_min:x_max] = VAL_FREE
