@@ -347,10 +347,10 @@ class Pilot:
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
-            print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
+            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
-        print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
+        #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
         return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
