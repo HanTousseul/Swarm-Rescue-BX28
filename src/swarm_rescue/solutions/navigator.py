@@ -116,7 +116,7 @@ class Navigator:
             start_pos = self.drone.pos_history_long[0]
             dist_moved = np.linalg.norm(self.drone.estimated_pos - start_pos)
             if dist_moved < 8.0:
-                print(f"[{self.drone.identifier}] ⚠️ STUCK. Initiating Smart Unstuck...")
+                # print(f"[{self.drone.identifier}] ⚠️ STUCK. Initiating Smart Unstuck...")
                 return True
         return False
 
@@ -195,7 +195,7 @@ class Navigator:
                 # (Wall thật là > 2000, vùng đệm là 300-1000)
                 cost_threshold = 8000.0 if self.drone.state == 'EXPLORING' else 9000.0
                 if cost > cost_threshold: 
-                    print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
+                    # print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
                     path_blocked = True
                     break
             

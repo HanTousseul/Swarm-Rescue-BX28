@@ -146,7 +146,7 @@ class Pilot:
 
         if steps_remaining <= RETURN_TRIGGER_STEPS:
             if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
+                # print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
                 self.drone.state = "RETURNING"
                 self.drone.current_target = None
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
@@ -171,9 +171,9 @@ class Pilot:
 
         for elt in range (len(lidar_data)):
 
-            if lidar_data[elt] < 90:
+            if lidar_data[elt] < 180:
 
-                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 1
+                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 20
                 force = WALL_CONSTANT / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
 
@@ -259,7 +259,7 @@ class Pilot:
 
         # C. Apply Forces based on Social Hierarchy
         K_DRONE = 1000 if self.drone.state == 'DISPERSING' else 200 # Base repulsion constant
-        # if self.drone.state == 'DISPERSING': print(K_DRONE)
+        # if self.drone.state == 'DISPERSING': # print(K_DRONE)
         
         # Normal Drones pushing us
         if not am_i_vip: 
@@ -386,19 +386,30 @@ class Pilot:
         # 5. Active Braking & Approach
         BRAKE_DIST = 120.0 
         if dist_to_target < BRAKE_DIST:
-            base_forward = max(0.15, dist_to_target * 0.03) 
+            # [FIXED] Tăng mức tối thiểu từ 0.15 lên 0.4 để có đủ lực "ủi" vào bãi đỗ
+            base_forward = max(0.4, dist_to_target * 0.03) 
             base_forward *= alignment_factor
             if self.current_speed > 4.0: base_forward = -0.4 
         else:
             base_forward = MAX_SPEED * alignment_factor
-        
-        forward_cmd = base_forward + repulsion_rad
 
-        if is_reversing: forward_cmd = -forward_cmd
+        # --- [NEW] CHỈ GIẢM XÓC TAY LÁI, KHÔNG HÃM TỐC ĐỘ ---
+        # Giúp lướt mượt qua hành lang nhưng vẫn giữ nguyên đà tiến
+        lidar_values = self.drone.lidar_values()
+        if lidar_values is not None and min(lidar_values) < 60.0:
+            if abs(angle_error) < 0.5:
+                rotation_cmd *= 0.5
+
+        # --- [FIXED] VÁ LỖI TRIỆT TIÊU KHIÊN VẬT LÝ LÚC ĐI LÙI ---
+        if not is_reversing:
+            # Đi tiến: Lực ga và lực đẩy giữ nguyên
+            forward_cmd = base_forward + repulsion_rad
+        else:
+            # Đi lùi: CHỈ lật ngược lực ga, GIỮ NGUYÊN chiều lực đẩy tường!
+            # Nhờ vậy khi xuống hàm move_function, khiên đẩy tường sẽ được phục hồi 100%
+            forward_cmd = -base_forward + repulsion_rad
+            
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
-
-        if abs(angle_error) > 0.5 and not is_reversing:
-            repulsion_orthor += -0.5 * np.sign(angle_error)
 
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
@@ -406,7 +417,7 @@ class Pilot:
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
-        #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
+        ## print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
 
         return {
             "forward": float(forward_cmd),

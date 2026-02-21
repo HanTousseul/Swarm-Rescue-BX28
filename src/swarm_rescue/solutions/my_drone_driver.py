@@ -117,14 +117,14 @@ class MyStatefulDrone(DroneAbstract):
                         tmp = dist_to_center
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
-        # Debug visualization
-        if self.cnt_timestep % 5 == 0:
-            self.nav.obstacle_map.display(
-                self.estimated_pos, 
-                current_target=self.current_target,
-                current_path=self.nav.current_astar_path, 
-                window_name=f"Map - Drone {self.identifier}"
-            )
+        # # Debug visualization
+        # if self.cnt_timestep % 5 == 0:
+        #     self.nav.obstacle_map.display(
+        #         self.estimated_pos, 
+        #         current_target=self.current_target,
+        #         current_path=self.nav.current_astar_path, 
+        #         window_name=f"Map - Drone {self.identifier}"
+        #     )
 
         # 4. Receive and process messages
 
@@ -222,10 +222,10 @@ class MyStatefulDrone(DroneAbstract):
             # 1. Check for Victims (Highest Priority)
             best_victim_pos = self.victim_manager.get_nearest_victim(self.estimated_pos, self.blacklisted_targets)
             # Ignore victims at home base (already rescued)
-            if best_victim_pos is not None and self.rescue_center_pos is not None:
-                if np.linalg.norm(best_victim_pos - self.rescue_center_pos) < 200.0:
-                    self.victim_manager.delete_victim_at(best_victim_pos)
-                    best_victim_pos = None 
+            # if best_victim_pos is not None and self.rescue_center_pos is not None:
+            #     if np.linalg.norm(best_victim_pos - self.rescue_center_pos) < 100.0:
+            #         self.victim_manager.delete_victim_at(best_victim_pos)
+            #         best_victim_pos = None 
 
             if best_victim_pos is not None:
                 self.current_target = best_victim_pos
@@ -244,7 +244,8 @@ class MyStatefulDrone(DroneAbstract):
                         self.estimated_pos, 
                         self.estimated_angle, 
                         self.preferred_angle,
-                        self.initial_position
+                        self.initial_position,
+                        self.rescue_center_pos
                     )
                     
                     if frontier is not None:
@@ -306,7 +307,7 @@ class MyStatefulDrone(DroneAbstract):
                         break 
 
             # Rescue Timeout
-            if self.rescue_time >= 100:
+            if self.rescue_time >= 50:
                 if self.current_target is not None: 
                     print(f"{[self.identifier]} Delete victim at {self.current_target}")
                     self.victim_manager.delete_victim_at(self.current_target)
@@ -364,9 +365,9 @@ class MyStatefulDrone(DroneAbstract):
             dist = np.linalg.norm(self.estimated_pos - self.current_target)
             
             USE_DIRECT_PID = False
-            if (self.state in ["RESCUING", "RETURNING"]) and (dist < 150.0):
-                if self.nav.obstacle_map.check_line_of_sight(self.estimated_pos, self.current_target, safety_radius=1, check_cost=False):
-                    USE_DIRECT_PID = True
+            # if (self.state in ["RESCUING", "RETURNING"]) and (dist < 150.0):
+            #     if self.nav.obstacle_map.check_line_of_sight(self.estimated_pos, self.current_target, safety_radius=1, check_cost=False):
+            #         USE_DIRECT_PID = True
             
             if USE_DIRECT_PID:
                 next_waypoint = self.current_target
