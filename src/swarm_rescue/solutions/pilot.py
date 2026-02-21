@@ -3,7 +3,7 @@ import numpy as np
 from swarm_rescue.simulation.drone.controller import CommandsDict
 from swarm_rescue.simulation.utils.utils import normalize_angle
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
-
+from random import random
 class Pilot:
     """
     Low-level Flight Controller.
@@ -80,7 +80,64 @@ class Pilot:
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
 
 
-    def repulsive_force(self, total_correction_norm:float = 0.7) -> tuple:
+    def repulsive_force(self, total_correction_norm:float = 0.12) -> tuple:
+
+        total_rad_repulsion = 0
+        total_orthor_repulsion = 0
+        WALL_CONSTANT = 100
+        DRONE_CONSTANT = .5
+        quotient_rad_repulsion = 4
+        min_distance_wounded = 30
+        use_rad_repulsion = True
+        min_angle_difference = 0.35 # (radian) the angle difference below which we assume that two semantic sensor rays hitting drones are actually hitting the same drone
+        exponent_wall = 2.3
+        exponent_drone = 2.3
+        epsilon_range = 0.2 # when evading a drone, we add a random epsilon angle to our deviation, it is chosen in (-epsilon_range, epsilon_range)
+
+        lidar_data = self.drone.lidar_values()
+        semantic_data = self.drone.semantic_values()
+        ray_angles = self.drone.lidar_rays_angles()
+        last_drone_angle = None # prevents us from computing repulsive force for a drone multiple times
+
+        for elt in range (len(lidar_data)):
+
+            if 0 < lidar_data[elt] < 200:
+
+                force = WALL_CONSTANT / lidar_data[elt] ** exponent_wall
+                unit_vector_angle = ray_angles[elt] + math.pi
+
+                total_rad_repulsion += (force / quotient_rad_repulsion) * np.cos(unit_vector_angle)
+                total_orthor_repulsion += force *np.sin(unit_vector_angle)
+
+        for elt in range(len(semantic_data)):
+
+            if semantic_data[elt].entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and not semantic_data[elt].grasped and self.drone.state =='RESCUING' and semantic_data[elt].distance < min_distance_wounded:
+
+                use_rad_repulsion = False
+
+            if semantic_data[elt].entity_type == DroneSemanticSensor.TypeEntity.DRONE:
+
+                if last_drone_angle is not None and abs(last_drone_angle - semantic_data[elt].angle) < min_angle_difference: continue
+
+                last_drone_angle = semantic_data[elt].angle
+
+                force = DRONE_CONSTANT // (semantic_data[elt].distance / 100) ** exponent_drone
+                unit_vector_angle = semantic_data[elt].angle + np.pi + epsilon_range * (2 * random() - 1)
+
+                total_rad_repulsion += force * np.cos(unit_vector_angle)
+                total_orthor_repulsion += force *np.sin(unit_vector_angle)
+
+        total_rad_repulsion *= total_correction_norm
+        total_orthor_repulsion *= total_correction_norm
+        
+        if not use_rad_repulsion: total_rad_repulsion = 0
+
+        print(self.drone.drone_health)
+        
+        return total_rad_repulsion, total_orthor_repulsion
+
+
+    def repulsive_force_new(self, total_correction_norm:float = 0.7) -> tuple:
         '''
         returns a radial and an orthoradial component of a repulsive force that helps with preventing collisions with surroundings
         
@@ -265,7 +322,6 @@ class Pilot:
 
         if lateral > 1: lateral = 1
         elif lateral < -1: lateral = -1
-
 
         return {"forward": forward, "lateral": lateral, "rotation": rotation, "grasper":grasper}
 

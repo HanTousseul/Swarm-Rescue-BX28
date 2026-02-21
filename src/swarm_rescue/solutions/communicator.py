@@ -18,6 +18,9 @@ class CommunicatorHandler:
         :param self: self
         '''
 
+        self.drone.priority = self.priority()
+        self.drone.has_priority = True
+
         self.list_nearby_drones = []
         self.list_vip_drones = [] # [NEW] Track drones carrying victims (Priority yielding)
         self.list_victims_taken_care_of = []
@@ -51,6 +54,9 @@ class CommunicatorHandler:
             #    if elt not in self.drone.victim_manager.registry:
             #    
             #       self.drone.victim_manager.registry.append(elt)  
+
+            if content['priority'] > self.drone.priority: 
+                self.drone.has_priority = False
 
         self.consolidate_maps()
         return          
