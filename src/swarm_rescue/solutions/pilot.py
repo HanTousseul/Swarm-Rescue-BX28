@@ -51,31 +51,45 @@ class Pilot:
 
         angle_error = normalize_angle(wounded.angle)
         abs_error = abs(angle_error)
+        side_sign = 1.0 if (self.drone.identifier is None or self.drone.identifier % 2 == 0) else -1.0
 
-        align_threshold = math.radians(10.0)
-        grasp_distance = 32.0
+        align_threshold = math.radians(12.0)
+        grasp_distance = 34.0
 
-        if abs_error > align_threshold:
+        # Overtake mode: if we are almost perfectly behind a moving victim, push harder
+        # and add a tiny lateral bias so we do not stay in the exact same lane forever.
+        if abs_error < math.radians(11.0) and wounded.distance > 24.0:
+            overtake_speed = float(np.clip(0.74 + 0.005 * wounded.distance, 0.74, 1.0))
             return {
-                "forward": 0.0,
+                "forward": overtake_speed,
+                "lateral": float(0.24 * side_sign),
+                "rotation": float(np.clip(2.8 * angle_error, -0.9, 0.9)),
+                "grasper": 0
+            }
+
+        # Keep moving while aligning so we do not trail behind moving victims.
+        if abs_error > align_threshold:
+            moving_align_speed = float(np.clip(0.44 + 0.006 * wounded.distance, 0.44, 0.92))
+            return {
+                "forward": moving_align_speed,
                 "lateral": 0.0,
-                "rotation": float(np.clip(3.0 * angle_error, -1.0, 1.0)),
+                "rotation": float(np.clip(3.4 * angle_error, -1.0, 1.0)),
                 "grasper": 0
             }
 
         if wounded.distance > grasp_distance:
-            approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
+            approach_speed = float(np.clip(0.52 + 0.009 * (wounded.distance - grasp_distance), 0.52, 1.0))
             return {
                 "forward": approach_speed,
                 "lateral": 0.0,
-                "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+                "rotation": float(np.clip(2.2 * angle_error, -0.75, 0.75)),
                 "grasper": 0
             }
 
         return {
-            "forward": 0.06,
+            "forward": 0.14,
             "lateral": 0.0,
-            "rotation": float(np.clip(2.0 * angle_error, -0.6, 0.6)),
+            "rotation": float(np.clip(2.0 * angle_error, -0.7, 0.7)),
             "grasper": 1
         }
 
@@ -392,6 +406,16 @@ class Pilot:
             if self.current_speed > 4.0: base_forward = -0.4 
         else:
             base_forward = MAX_SPEED * alignment_factor
+
+        # Catch-up boost while rescuing moving targets.
+        if self.drone.state == "RESCUING" and not self.drone.grasped_wounded_persons():
+            wounded = self._nearest_visible_wounded()
+            if wounded is not None and 18.0 < wounded.distance < 170.0:
+                # Stronger boost at medium range, lighter near latch distance.
+                if wounded.distance > 70.0:
+                    base_forward = min(1.0, base_forward + 0.16)
+                else:
+                    base_forward = min(1.0, base_forward + 0.10)
 
         # --- [NEW] CHỈ GIẢM XÓC TAY LÁI, KHÔNG HÃM TỐC ĐỘ ---
         # Giúp lướt mượt qua hành lang nhưng vẫn giữ nguyên đà tiến
