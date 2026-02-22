@@ -106,6 +106,7 @@ class MyStatefulDrone(DroneAbstract):
             self.initial_position = self.estimated_pos.copy()
             print(f"[{self.identifier}] 🏁 STARTED.")
 
+        print(self.cnt_timestep)
         # 3. Locate Rescue Center
         check_center = False
         if semantic_data:
@@ -121,6 +122,7 @@ class MyStatefulDrone(DroneAbstract):
                         tmp = dist_to_center
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
+        print(f'{self.identifier} {self.drone_health}')
         # Debug visualization
         if self.cnt_timestep % 5 == 0:
             self.nav.obstacle_map.display(
@@ -135,9 +137,9 @@ class MyStatefulDrone(DroneAbstract):
         self.comms.process_incoming_messages()
 
         # ================= STATE MACHINE =================
-
         # --- STATE: DISPERSING ---
         if self.state == "DISPERSING":
+            self.state == 'EXPLORING'
             # Initialize a memory variable to track when safe distance is reached
                 
             dx = self.estimated_pos[0] - self.initial_position[0]
@@ -148,7 +150,7 @@ class MyStatefulDrone(DroneAbstract):
             if self.safe_dispersion_reached_tick is None:
                 # Condition: Run for at least 50 ticks AND exceed 150px safe distance.
                 # Safety Timeout: Force escape at 200 ticks to prevent infinite deadlock.
-                if (self.cnt_timestep >= 50 and dist_moved >= 150.0) or self.cnt_timestep >= 200:
+                if (self.cnt_timestep >= 50 and dist_moved >= 150.0) or self.cnt_timestep >= 1:
                     self.safe_dispersion_reached_tick = self.cnt_timestep
             
             # 1. Active Repulsion: Push away from peers, walls, and Rescue Center
@@ -389,7 +391,7 @@ class MyStatefulDrone(DroneAbstract):
                         self.path_fail_count = 0
                         
                         # Check grasper
-                        keep_grasping = 1 if self.grasped_wounded_persons() else 0
+                        keep_grasping = 1 if self.grasped_wounded_persons() and self.state == 'RETURNING' else 0
                         
                         # Turn to unstuck
                         #print(f'{self.identifier} {self.state} move_function 9')
@@ -446,10 +448,8 @@ class MyStatefulDrone(DroneAbstract):
                 self.current_target = None
                 self.nav.current_astar_path = []
                 #print(f'{self.identifier} {self.state} move_function 10')
-                if self.grasped_wounded_persons(): grasper = 1
-                else: grasper = 0
 
-                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
+                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
 
         elif self.state in ["RETURNING", "RESCUING"] and self.current_target is not None:
              if next_waypoint is None and not USE_DIRECT_PID:
@@ -488,7 +488,7 @@ class MyStatefulDrone(DroneAbstract):
                     # Use Pilot's repulsive force (boosted to 0.8) to push away
                     print(f'[{self.identifier}] STUCK, trying to push from wall')
                     #print(f'{self.identifier} {self.state} move_function 13')
-                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = int(grasper), repulsive_force_bool= True)
+                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = grasper, repulsive_force_bool= True)
             
             # Fallback if no wall is nearby (stuck for other reasons)
             #print(f'{self.identifier} {self.state} move_function 14')
