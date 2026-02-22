@@ -19,7 +19,8 @@ class CommunicatorHandler:
         self.nav = Navigator(self)
         self.forbidden = dict()          # Unified storage (IDs and 'stuck_' keys)
         self.other_drones_pos = dict()   # Dictionary of {id: last_known_pos}
-        self.FORBIDDEN_RADIUS = 50
+        self.FORBIDDEN_RADIUS = 100
+        self.INERTIA = 50
 
     def process_incoming_messages(self) -> None:
         self.list_nearby_drones = []
@@ -93,12 +94,12 @@ class CommunicatorHandler:
         for drone_id in id_list:
             pos = self.other_drones_pos.get(drone_id)
             if pos is not None:
-                self.forbidden[drone_id] = pos  # store last-known position
+                self.forbidden[drone_id] = [pos]  # store last-known position
 
     def mark_as_stuck(self):
         """
         Handles current stationary positions for drones physically detected as 
-        stuck.
+        stuck. 
         """
         if not hasattr(self.drone, 'nav'): return
         
@@ -106,8 +107,10 @@ class CommunicatorHandler:
         if not coords_list: return
         
         for pos in coords_list:
-            stuck_key = f"stuck_{int(pos[0]/5)}_{int(pos[1]/5)}" 
-            self.forbidden[stuck_key] = np.array(pos)
+            for (drone_id, coord) in self.forbidden:
+                if (abs(pos[0] - coord[0]) ** 2 + abs(pos[1] - coord[1]) ** 2 >= self.INERTIA ** 2):
+                    self.forbidden[drone_id].append(np.array(pos)) # Logic: lost comms + stuck = dead
+            
     
     def update_forbidden_zones(self):
         """
@@ -116,11 +119,12 @@ class CommunicatorHandler:
         2. Stationary drone positions from the navigator.
         3. Recovery: Removes drones from forbidden if they start talking again.
         """
+        # Update from Comms
+        self.other_pos()
+        
         # Update from Sensors
         self.mark_as_stuck()
         
-        # Update from Comms
-        self.other_pos()
         return self.forbidden
 
     def consolidate_maps(self) -> None:
