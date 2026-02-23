@@ -137,9 +137,9 @@ class MyStatefulDrone(DroneAbstract):
         self.comms.process_incoming_messages()
 
         # ================= STATE MACHINE =================
+
         # --- STATE: DISPERSING ---
         if self.state == "DISPERSING":
-            self.state == 'EXPLORING'
             # Initialize a memory variable to track when safe distance is reached
                 
             dx = self.estimated_pos[0] - self.initial_position[0]
@@ -209,7 +209,7 @@ class MyStatefulDrone(DroneAbstract):
             # Wall Repulsion Unstuck
             grasper = 1 if self.grasped_wounded_persons() else 0
             #print(f'{self.identifier} {self.state} move_function 2')
-            return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
+            return self.pilot.move_function(forward = 0, lateral = 0, rotation = 1.0, grasper = grasper, repulsive_force_bool = True)
 
 
         # --- STATE: EXPLORING ---
@@ -220,10 +220,10 @@ class MyStatefulDrone(DroneAbstract):
             # 1. Check for Victims (Highest Priority)
             best_victim_pos = self.victim_manager.get_nearest_victim(self.estimated_pos, self.blacklisted_targets)
             # Ignore victims at home base (already rescued)
-            if best_victim_pos is not None and self.rescue_center_pos is not None:
-                if np.linalg.norm(best_victim_pos - self.rescue_center_pos) < 200.0:
-                    self.victim_manager.delete_victim_at(best_victim_pos)
-                    best_victim_pos = None 
+            # if best_victim_pos is not None and self.rescue_center_pos is not None:
+            #     if np.linalg.norm(best_victim_pos - self.rescue_center_pos) < 200.0:
+            #         self.victim_manager.delete_victim_at(best_victim_pos)
+            #         best_victim_pos = None 
 
             if best_victim_pos is not None:
                 self.current_target = best_victim_pos
@@ -242,7 +242,8 @@ class MyStatefulDrone(DroneAbstract):
                         self.estimated_pos, 
                         self.estimated_angle, 
                         self.preferred_angle,
-                        self.initial_position
+                        self.initial_position,
+                        self.rescue_center_pos
                     )
                     
                     if frontier is not None:
@@ -306,7 +307,7 @@ class MyStatefulDrone(DroneAbstract):
                         break 
 
             # Rescue Timeout
-            if self.rescue_time >= 100:
+            if self.rescue_time >= 50:
                 if self.current_target is not None: 
                     print(f"{[self.identifier]} Delete victim at {self.current_target}")
                     self.victim_manager.delete_victim_at(self.current_target)
@@ -354,8 +355,7 @@ class MyStatefulDrone(DroneAbstract):
 
         # --- STATE: END GAME ---
         elif self.state == "END_GAME":
-            target = self.initial_position if self.initial_position is not None else np.array([0,0])
-            if np.linalg.norm(self.estimated_pos - target) > 10.0:
+            if not self.is_inside_return_area:
                 self.state = "RETURNING"
             #print(f'{self.identifier} {self.state} move_function 8')    
             return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
@@ -366,41 +366,31 @@ class MyStatefulDrone(DroneAbstract):
 
         if self.current_target is not None:
             dist = np.linalg.norm(self.estimated_pos - self.current_target)
-            
-            USE_DIRECT_PID = False
-            if (self.state in ["RESCUING", "RETURNING"]) and (dist < 150.0):
-                if self.nav.obstacle_map.check_line_of_sight(self.estimated_pos, self.current_target, safety_radius=1, check_cost=False):
-                    USE_DIRECT_PID = True
-            
-            if USE_DIRECT_PID:
-                next_waypoint = self.current_target
-                self.path_fail_count = 0
-            else:
-                if len(self.nav.current_astar_path) == 0 and dist > 40.0:
-                    self.path_fail_count += 1 
-                    if self.path_fail_count > 30:
-                        print(f"[{self.identifier}] ❌ Path failed.")
-                        
-                        # Only blaclist if not returning
-                        if self.state != "RETURNING":
-                            print("   -> Blacklisting target.")
-                            self.blacklisted_targets.append(self.current_target)
-                        
-                        self.blacklist_timer = 200
-                        self.current_target = None
-                        self.path_fail_count = 0
-                        
-                        # Check grasper
-                        keep_grasping = 1 if self.grasped_wounded_persons() and self.state == 'RETURNING' else 0
-                        
-                        # Turn to unstuck
-                        #print(f'{self.identifier} {self.state} move_function 9')
-                        return self.pilot.move_function(forward = 0, lateral = 0, rotation = 1.0, grasper = keep_grasping, repulsive_force_bool = True)
-                else:
+            if len(self.nav.current_astar_path) == 0 and dist > 40.0:
+                self.path_fail_count += 1 
+                if self.path_fail_count > 30:
+                    print(f"[{self.identifier}] ❌ Path failed.")
+                    
+                    # Only blaclist if not returning
+                    if self.state != "RETURNING":
+                        print("   -> Blacklisting target.")
+                        self.blacklisted_targets.append(self.current_target)
+                    
+                    self.blacklist_timer = 200
+                    self.current_target = None
                     self.path_fail_count = 0
-                
-                # Navigator will return None if path becomes blocked
-                next_waypoint = self.nav.get_next_waypoint(self.current_target)
+                    
+                    # Check grasper
+                    keep_grasping = 1 if self.grasped_wounded_persons() else 0
+                    
+                    # Turn to unstuck
+                    #print(f'{self.identifier} {self.state} move_function 9')
+                    return self.pilot.move_function(forward = 0, lateral = 0, rotation = 1.0, grasper = keep_grasping, repulsive_force_bool = True)
+            else:
+                self.path_fail_count = 0
+            
+            # Navigator will return None if path becomes blocked
+            next_waypoint = self.nav.get_next_waypoint(self.current_target)
 
         # Fallback Check
         dist_to_target = 9999.0
@@ -448,11 +438,13 @@ class MyStatefulDrone(DroneAbstract):
                 self.current_target = None
                 self.nav.current_astar_path = []
                 #print(f'{self.identifier} {self.state} move_function 10')
+                if self.grasped_wounded_persons(): grasper = 1
+                else: grasper = 0
 
-                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
+                return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = grasper, repulsive_force_bool = True)
 
         elif self.state in ["RETURNING", "RESCUING"] and self.current_target is not None:
-             if next_waypoint is None and not USE_DIRECT_PID:
+             if next_waypoint is None:
                 # Path blocked in rescue mode -> Replan A* will trigger in next loop by Nav
                 # But here we handle stuck patience
                 self.patience += 1
@@ -488,7 +480,7 @@ class MyStatefulDrone(DroneAbstract):
                     # Use Pilot's repulsive force (boosted to 0.8) to push away
                     print(f'[{self.identifier}] STUCK, trying to push from wall')
                     #print(f'{self.identifier} {self.state} move_function 13')
-                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = grasper, repulsive_force_bool= True)
+                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = int(grasper), repulsive_force_bool= True)
             
             # Fallback if no wall is nearby (stuck for other reasons)
             #print(f'{self.identifier} {self.state} move_function 14')
@@ -497,7 +489,7 @@ class MyStatefulDrone(DroneAbstract):
         # Execute Pilot Command
         real_target = self.current_target 
         self.current_target = next_waypoint 
-        current_max_speed = 1.0 if self.state == "RETURNING" else self.MAX_SPEED
+        self.MAX_SPEED = 1.0 if self.state == "RETURNING" else 0.9
         #print(f'{self.identifier} {self.state} move_to_target_carrot_function_call my_drone_driver')
         command = self.pilot.move_to_target_carrot()
         self.current_target = real_target 

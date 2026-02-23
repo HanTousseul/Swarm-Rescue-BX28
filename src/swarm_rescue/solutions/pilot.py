@@ -59,8 +59,8 @@ class Pilot:
             return self.move_function(forward = 0, lateral = 0, rotation = float(np.clip(3.0 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
 
         if wounded.distance > grasp_distance:
-            approach_speed = 0.8
-            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True, total_correction_norm = 0.07)
+            approach_speed = 0.5    
+            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True, total_correction_norm = 0.2)
 
         return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
 
@@ -79,6 +79,28 @@ class Pilot:
                 self.drone.current_target = None
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
 
+    def is_in_tight_area(self,SMALL_VALUE:int = 50,min_nb_rays:int = 30):
+        '''
+        returns whether or not the drone is in a tight area (and should get a weaker repulsive force)
+
+        :param self: self
+        :param SMALL_VALUE: The threshold below which a ray contributes to the drone being considered in a tight area
+        :type SMALL_VALUE: int
+        :param min_nb_rays: Minimal number of rays for us to consider the drone in a tight area
+        :type min_nb_rays: int
+        :return: Do more than min_nb_rays hit an obstacle closer than SMALL_VALUE?
+        :rtype: bool
+        '''
+
+        lidar_data = self.drone.lidar_values()
+        nb = 0
+        nb_rays_practical = min_nb_rays / 5
+        for ray in range(0,len(lidar_data),5):
+
+            if ray < SMALL_VALUE: nb += 1
+            if nb > min_nb_rays: return True
+
+        return False
 
     def repulsive_force(self, total_correction_norm:float) -> tuple:
 
@@ -94,8 +116,13 @@ class Pilot:
 
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
-        WALL_CONSTANT = 0.02
+
+        if self.is_in_tight_area():
+            WALL_CONSTANT = 0.02
+        else:
+            WALL_CONSTANT = 0.007
         DRONE_CONSTANT = .1
+
         quotient_rad_repulsion = 4
         quotient_ortho_repulsion = 2
         min_angle_difference = 0.35 # (radian) the angle difference below which we assume that two semantic sensor rays hitting drones are actually hitting the same drone
@@ -110,7 +137,6 @@ class Pilot:
         ray_angles = self.drone.lidar_rays_angles()
         last_drone_angle = None # prevents us from computing repulsive force for a drone multiple times
         list_rays_rescue = []
-
 
         for elt in range(len(semantic_data)):
 
@@ -128,13 +154,13 @@ class Pilot:
 
                 last_drone_angle = semantic_data[elt].angle
 
-                if self.drone.has_priority:
+                #if self.drone.has_priority:
+#
+                #    force = WALL_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
+                #    unit_vector_angle = semantic_data[elt].angle + np.pi
+                #    total_rad_repulsion += force * np.cos(unit_vector_angle) # if drone has priority, we just slow it down but dont deviate it
 
-                    force = WALL_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
-                    unit_vector_angle = semantic_data[elt].angle + np.pi
-                    total_rad_repulsion += force * np.cos(unit_vector_angle) # if drone has priority, we just slow it down but dont deviate it
-
-                else:
+                if not self.drone.has_priority:
 
                     force = DRONE_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
                     unit_vector_angle = semantic_data[elt].angle + np.pi + epsilon_range * (2 * random() - 1) # unstuck the drones by adding a small random deviation angle
@@ -153,7 +179,7 @@ class Pilot:
                 else:
                     list_rays_rescue[-1] = semantic_data[elt].angle
 
-        # removes repulsive force from rescue center
+        # removes repulsive force from rescue center when rescuing
         if len(list_rays_rescue) == 2:
 
             corresponding_first_index = round(np.rad2deg(list_rays_rescue[0])) // 2 + 90
@@ -182,7 +208,7 @@ class Pilot:
         return total_rad_repulsion, total_orthor_repulsion
 
 
-    def repulsive_force_new(self, total_correction_norm:float = 0.5) -> tuple:
+    def repulsive_force_new(self, total_correction_norm:float = 0.3) -> tuple:
         '''
         returns a radial and an orthoradial component of a repulsive force that helps with preventing collisions with surroundings
         
@@ -350,7 +376,7 @@ class Pilot:
         :type grasper: int
         :param repulsive_force_bool: whether or not to generate evasive repulsive force
         :type repulsive_force_bool: bool
-        :param total_correction_norm: norm of the repulsive (correction) force (given value is 0.8)
+        :param total_correction_norm: norm of the repulsive (correction) force (given value is 0.3)
         :type total_correction_norm: float
         :return: {"forward", "lateral", "rotation", "grasper"}
         :rtype: CommandsDict

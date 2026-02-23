@@ -110,22 +110,45 @@ class GridMap:
 
     def update_cost_map(self):
         """Generates a Cost Map using Distance Transform. High cost near walls."""
-        binary_grid = (self.grid <= 20.0).astype(np.uint8)
+        
+        # 1. CREATE VIRTUAL CONCRETE MASK (Do not modify self.grid directly)
+        # Filter out solid walls (Values > 10.0)
+        obstacle_mask = (self.grid > 10.0).astype(np.uint8)
+        
+        # Use a 3x3 kernel (approx 24cm) to seal dotted walls (e.g., fences) 
+        # without unintentionally blocking real narrow doors.
+        closing_kernel = np.ones((3, 3), np.uint8)
+        
+        # Apply Morphological Close to bridge small gaps between obstacles
+        closed_obstacles = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, closing_kernel)
+        
+        # 2. GENERATE SAFETY MAP FROM THE NEW MASK
+        # Invert the mask: 1 = free space, 0 = wall (including virtual concrete)
+        binary_grid = (1 - closed_obstacles).astype(np.uint8)
+        
+        # Erode the free space slightly to maintain a safety margin from the walls
         kernel = np.ones((3, 3), np.uint8) 
         eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
+        
+        # Calculate distance from each free cell to the nearest wall
         self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
+        # Calculate base cost: Inversely proportional to the distance from obstacles
         SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
-        # Calculate cost: Inversely proportional to distance from obstacles
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
-        # Penalize Unknown areas slightly to encourage exploring free space
-        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 3.0
+        # 3. APPLY LETHAL RADIUS AND PENALTIES
+        # Shrink lethal radius (1.5 grids ~ 12cm) to allow squeezing through pillars and tight corridors
+        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 1.5 
         self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
 
+        # Heavily penalize unknown areas (based on the original unaltered self.grid)
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
         UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
+        
+        # Strictly lock Cost = 9999.0 on actual walls OR areas sealed by the virtual concrete
+        self.cost_map[closed_obstacles == 1] = 9999.0
         self.cost_map[self.grid > 20.0] = 9999.0
 
     def get_dijkstra_path(self, current_pos: np.ndarray, max_steps: int = 40) -> List[np.ndarray]:
@@ -226,7 +249,7 @@ class GridMap:
                         self.dijkstra_grid[ny, nx] = new_val
                         heapq.heappush(pq, (new_val, nx, ny))
 
-    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float, preferred_angle: float = 0.0, initial_pos: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
+    def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float, preferred_angle: float = 0.0, initial_pos: Optional[np.ndarray] = None, rescue_center_pos: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
         """
         Dijkstra Flood Fill with Advanced Scoring:
         1. Distance Filter: Prefer targets > 150cm away (avoid short-sightedness).
@@ -318,17 +341,35 @@ class GridMap:
         
         filtered_candidates = []
 
-        # First Pass: Filter for "Far Enough" candidates
+        # [NEW] Distance Blacklist Logic
+        # Filter out candidates that are either too close to the drone, 
+        # OR inside the Rescue Center's safe zone (Home-blindness prevention)
         for cost, gx, gy in frontier_candidates:
             wx, wy = self.grid_to_world(gx, gy)
-            dist_air = math.hypot(wx - drone_pos[0], wy - drone_pos[1])
             
+            # --- BLACKLIST: Ignore shadows near the Rescue Center ---
+            if rescue_center_pos is not None:
+                dist_to_base = math.hypot(wx - rescue_center_pos[0], wy - rescue_center_pos[1])
+                if dist_to_base < 180.0:
+                    continue # Skip this candidate entirely!
+            # --------------------------------------------------------
+            
+            dist_air = math.hypot(wx - drone_pos[0], wy - drone_pos[1])
             if dist_air > MIN_DIST_CM:
                 filtered_candidates.append((cost, gx, gy))
         
-        # Fallback: If no far candidates, use all valid candidates
+        # Fallback: If no far candidates, use all valid candidates 
+        # (But STILL strictly enforce the Rescue Center Blacklist)
         if not filtered_candidates:
-            filtered_candidates = frontier_candidates
+            for cost, gx, gy in frontier_candidates:
+                wx, wy = self.grid_to_world(gx, gy)
+                
+                if rescue_center_pos is not None:
+                    dist_to_base = math.hypot(wx - rescue_center_pos[0], wy - rescue_center_pos[1])
+                    if dist_to_base < 180.0:
+                        continue # Skip even in fallback mode
+                        
+                filtered_candidates.append((cost, gx, gy))
 
         # Second Pass: Score Calculation (Travel Cost vs Information Gain vs Directional Bias)
         for cost, gx, gy in filtered_candidates:
