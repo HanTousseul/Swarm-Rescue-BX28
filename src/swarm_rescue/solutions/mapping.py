@@ -110,24 +110,45 @@ class GridMap:
 
     def update_cost_map(self):
         """Generates a Cost Map using Distance Transform. High cost near walls."""
-        binary_grid = (self.grid <= 20.0).astype(np.uint8)
+        
+        # 1. CREATE VIRTUAL CONCRETE MASK (Do not modify self.grid directly)
+        # Filter out solid walls (Values > 10.0)
+        obstacle_mask = (self.grid > 10.0).astype(np.uint8)
+        
+        # Use a 3x3 kernel (approx 24cm) to seal dotted walls (e.g., fences) 
+        # without unintentionally blocking real narrow doors.
+        closing_kernel = np.ones((3, 3), np.uint8)
+        
+        # Apply Morphological Close to bridge small gaps between obstacles
+        closed_obstacles = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, closing_kernel)
+        
+        # 2. GENERATE SAFETY MAP FROM THE NEW MASK
+        # Invert the mask: 1 = free space, 0 = wall (including virtual concrete)
+        binary_grid = (1 - closed_obstacles).astype(np.uint8)
+        
+        # Erode the free space slightly to maintain a safety margin from the walls
         kernel = np.ones((3, 3), np.uint8) 
         eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
+        
+        # Calculate distance from each free cell to the nearest wall
         self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
+        # Calculate base cost: Inversely proportional to the distance from obstacles
         SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
-        # Calculate cost: Inversely proportional to distance from obstacles
         self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
-        # [UPDATED] Shrink Lethal Radius from 3.0 to 1.5 (approx 12cm).
-        # This allows the planner to find paths through narrow gaps (like pillars),
-        # trusting the Pilot's repulsive force to handle the physical clearance.
-        ROBOT_RADIUS_GRID = 0.5 if self.panic_mode else 1.0 
+        # 3. APPLY LETHAL RADIUS AND PENALTIES
+        # Shrink lethal radius (1.5 grids ~ 12cm) to allow squeezing through pillars and tight corridors
+        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 1.5 
         self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
 
+        # Heavily penalize unknown areas (based on the original unaltered self.grid)
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
         UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
         self.cost_map[unknown_mask] += UNKNOWN_PENALTY
+        
+        # Strictly lock Cost = 9999.0 on actual walls OR areas sealed by the virtual concrete
+        self.cost_map[closed_obstacles == 1] = 9999.0
         self.cost_map[self.grid > 20.0] = 9999.0
 
     def get_dijkstra_path(self, current_pos: np.ndarray, max_steps: int = 40) -> List[np.ndarray]:

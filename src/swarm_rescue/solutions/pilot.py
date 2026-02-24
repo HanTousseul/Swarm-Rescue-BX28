@@ -128,39 +128,19 @@ class Pilot:
         if abs(angle_error) < 0.2:
             K_wall *= 0.4
 
-        step = 5 
-        for i in range(0, len(lidar), step):
-            dist = lidar[i]
-            if 10.0 < dist < ignore_dist:
-                if dist < min_dist_detected: min_dist_detected = dist
+        return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
 
-                force = K_wall / (dist ** 1.8)
-                force = min(1.0, force) 
-
-                angle_obs = angles[i]
-                push_angle = angle_obs + math.pi 
-                total_lat += force * math.sin(push_angle)
-
-        speed_factor = np.clip((min_dist_detected - critical_dist) / slow_down_threshold, 0.3, 1.0)
-        if aggressive: speed_factor = max(0.5, speed_factor)
-
-        return total_lat, speed_factor
-
-    def low_battery(self, steps_remaining: int, RETURN_TRIGGER_STEPS: int) -> None:
+    def low_battery(self) -> None:
         '''
         Takes care of the returning when little timesteps are left. Mainly changes drone states
         
         :param self: self
-        :param steps_remaining: number of steps remaining before the end
-        :type steps_remaining: int
-        :param RETURN_TRIGGER_STEPS: Number of timesteps before needing to go back
-        :type RETURN_TRIGGER_STEPS: int
         :return: None
         '''
 
-        if steps_remaining <= RETURN_TRIGGER_STEPS:
+        if self.drone.steps_remaining <= self.drone.RETURN_TRIGGER_STEPS:
             if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                # print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
+                print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
                 self.drone.state = "RETURNING"
                 self.drone.current_target = None
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
@@ -185,9 +165,9 @@ class Pilot:
 
         for elt in range (len(lidar_data)):
 
-            if lidar_data[elt] < 180:
+            if lidar_data[elt] < 120:
 
-                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 20
+                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 5
                 force = WALL_CONSTANT / lidar_data[elt] ** 2 
                 unit_vector_angle = ray_angles[elt] + math.pi
 
@@ -272,8 +252,8 @@ class Pilot:
                     normal_relative.append((dist, angle_local))
 
         # C. Apply Forces based on Social Hierarchy
-        K_DRONE = 1000 if self.drone.state == 'DISPERSING' else 200 # Base repulsion constant
-        # if self.drone.state == 'DISPERSING': # print(K_DRONE)
+        K_DRONE = 1000 if self.drone.state == 'DISPERSING' else 400 # Base repulsion constant
+        # if self.drone.state == 'DISPERSING': print(K_DRONE)
         
         # Normal Drones pushing us
         if not am_i_vip: 
@@ -311,43 +291,59 @@ class Pilot:
         actual_norm_correction = math.hypot(total_rad_repulsion,total_orthor_repulsion)
         if actual_norm_correction < 0.001: return 0,0
 
-        MAX_REPULSION = 1.5
+        MAX_REPULSION = 2.5
         if actual_norm_correction > MAX_REPULSION:
             total_rad_repulsion *= MAX_REPULSION / actual_norm_correction
             total_orthor_repulsion *= MAX_REPULSION / actual_norm_correction
 
         return (total_rad_repulsion, total_orthor_repulsion)
 
-    def stand_still(self, grasper) -> CommandsDict:
+    def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.8) -> CommandsDict:
+        
         '''
         returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
         
         :param self: self
-        :param grasper: whether or not we are currently grasping
-        :type grasper: bool
-        :return: {"forward": 0.0, "lateral": 0.0, "rotation": 0.0, "grasper": grasper}
+        :param forward: forward velocity in (-1,1). Negative values indicate backwards movement
+        :type forward: float
+        :param lateral: lateral velocity in (-1,1)
+        :type lateral: float
+        :param rotation: rotational velocity in (-1,1)
+        :type rotation: float
+        :param grasper: whether or not we are currently grasping (0 or 1)
+        :type grasper: int
+        :param repulsive_force_bool: whether or not to generate evasive repulsive force
+        :type repulsive_force_bool: bool
+        :param total_correction_norm: norm of the repulsive (correction) force
+        :type total_correction_norm: float
+        :return: {"forward", "lateral", "rotation", "grasper"}
         :rtype: CommandsDict
         '''
-        forward, lateral = self.repulsive_force(total_correction_norm = 0.2) # soft movement
-        return {
-            "forward": float(np.clip(forward, -1.0, 1.0)), 
-            "lateral": float(np.clip(lateral, -1.0, 1.0)), 
-            "rotation": 0.0, 
-            "grasper": int(grasper)
-        }
+        
+        if repulsive_force_bool:
+            corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm) # soft movement
 
-    def move_to_target_carrot(self, MAX_SPEED: float) -> CommandsDict:
+            forward += corr1
+            lateral += corr2
+
+        if forward > 1: forward = 1
+        elif forward < -1: forward = -1
+
+        if lateral > 1: lateral = 1
+        elif lateral < -1: lateral = -1
+
+
+        return {"forward": forward, "lateral": lateral, "rotation": rotation, "grasper":grasper}
+
+    def move_to_target_carrot(self) -> CommandsDict:
         '''
         Main control loop.
         :param self: self
-        :param MAX_SPEED: max speed allowed for the drone
-        :type MAX_SPEED: float
         :return: Description
         :rtype: CommandsDict
         '''
         if self.drone.current_target is None:
-            return self.drone.pilot.stand_still(grasper = False)
-
+            return self.drone.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
         # 1. Estimate Speed
         if self.last_pos is not None:
             move_dist = np.linalg.norm(self.drone.estimated_pos - self.last_pos)
@@ -390,6 +386,9 @@ class Pilot:
         # 3. Wall Avoidance
         repulsion_rad, repulsion_orthor = self.repulsive_force()
 
+        if abs(angle_error) > 0.5 and not is_reversing:
+            repulsion_orthor += -0.5 * np.sign(angle_error)
+
         if is_final_approach:
             repulsion_orthor = 0.0          
             repulsion_rad = 0.5
@@ -405,7 +404,7 @@ class Pilot:
             base_forward *= alignment_factor
             if self.current_speed > 4.0: base_forward = -0.4 
         else:
-            base_forward = MAX_SPEED * alignment_factor
+            base_forward = self.drone.MAX_SPEED * alignment_factor
 
         # Catch-up boost while rescuing moving targets.
         if self.drone.state == "RESCUING" and not self.drone.grasped_wounded_persons():
@@ -424,13 +423,10 @@ class Pilot:
             if abs(angle_error) < 0.5:
                 rotation_cmd *= 0.5
 
-        # --- [FIXED] VÁ LỖI TRIỆT TIÊU KHIÊN VẬT LÝ LÚC ĐI LÙI ---
+        # --- Fix error adding wrong force when go back ---
         if not is_reversing:
-            # Đi tiến: Lực ga và lực đẩy giữ nguyên
             forward_cmd = base_forward + repulsion_rad
         else:
-            # Đi lùi: CHỈ lật ngược lực ga, GIỮ NGUYÊN chiều lực đẩy tường!
-            # Nhờ vậy khi xuống hàm move_function, khiên đẩy tường sẽ được phục hồi 100%
             forward_cmd = -base_forward + repulsion_rad
             
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
@@ -438,6 +434,7 @@ class Pilot:
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
+            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
