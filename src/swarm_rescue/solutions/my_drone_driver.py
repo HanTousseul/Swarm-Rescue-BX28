@@ -67,7 +67,8 @@ class MyStatefulDrone(DroneAbstract):
         self.STUCK_TIME_EXPLORING = 50 #(timestep)
         self.STUCK_TIME_OTHER = 70 #(timestep)
         self.MAX_SPEED = 0.9 #in [0,1]
-        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+        #self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+        self.RETURN_TRIGGER_STEPS = 850
         self.floodfill_cooldown = 0
         # [NEW] Counter for map completion
         self.no_frontier_patience = 0
@@ -83,11 +84,22 @@ class MyStatefulDrone(DroneAbstract):
         Main control loop called by the simulator every step.
         """
         self.draw_top_layer()
-        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
         
         self.cnt_timestep += 1
         
+        print(self.state, self.comms.everyone_home)
+        if self.comms.everyone_home and self.state == 'END_GAME': 
+            print(f'{self.identifier} STOPPING')
+            self.state == 'STOP'
+
+        # --- STATE: STOP --- (At the end, when everyone is inside the return area, everyone should stop moving)
+        if self.state =='STOP': 
+            
+            print(True, 'stopping')
+            return self.pilot.move_function(forward=0, lateral=0, rotation=0, grasper=0, repulsive_force_bool=False)
+
         # 1. SENSING
+
         semantic_data = self.semantic_values() 
         self.victim_manager.update_from_sensor(self.estimated_pos, self.estimated_angle, semantic_data, self.cnt_timestep)
         known_victims_pos = [r['pos'] for r in self.victim_manager.registry]
@@ -106,7 +118,6 @@ class MyStatefulDrone(DroneAbstract):
             self.initial_position = self.estimated_pos.copy()
             print(f"[{self.identifier}] 🏁 STARTED.")
 
-        if self.cnt_timestep % 100 == 0: print(self.cnt_timestep)
         # 3. Locate Rescue Center
         check_center = False
         if semantic_data:
@@ -123,20 +134,27 @@ class MyStatefulDrone(DroneAbstract):
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
         # Debug visualization
-        if self.cnt_timestep % 5 == 0:
-            self.nav.obstacle_map.display(
-                self.estimated_pos, 
-                current_target=self.current_target,
-                current_path=self.nav.current_astar_path, 
-                window_name=f"Map - Drone {self.identifier}"
-            )
+        #if self.cnt_timestep % 5 == 0:
+        #    self.nav.obstacle_map.display(
+        #        self.estimated_pos, 
+        #        current_target=self.current_target,
+        #        current_path=self.nav.current_astar_path, 
+        #        window_name=f"Map - Drone {self.identifier}"
+        #    )
 
         # 4. Receive and process messages
 
         self.comms.process_incoming_messages()
 
         # ================= STATE MACHINE =================
+        if self.cnt_timestep % 25 == 1: print(self.drone_health)
+        if self.cnt_timestep % 25 == 0: print(self.cnt_timestep)
 
+        print(self.identifier, self.state, self.comms.everyone_home)
+
+        if self.comms.everyone_home and self.state == 'END_GAME': 
+            print(f'{self.identifier} STOPPING')
+            self.state == 'STOP'
         # --- STATE: DISPERSING ---
         if self.state == "DISPERSING":
             # Initialize a memory variable to track when safe distance is reached
@@ -452,7 +470,7 @@ class MyStatefulDrone(DroneAbstract):
                     if self.state == "RETURNING" and self.initial_position is not None:
                          if np.linalg.norm(self.current_target - self.initial_position) > 10.0:
                              self.current_target = self.initial_position
-                             print(f'{self.identifier} {self.state} move_function 11')
+                             #print(f'{self.identifier} {self.state} move_function 11')
                              return self.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 1, repulsive_force_bool = True)
                     if self.grasped_wounded_persons(): grasped = 1
                     else: grasped = 0

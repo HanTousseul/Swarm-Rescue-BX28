@@ -94,10 +94,10 @@ class Pilot:
 
         lidar_data = self.drone.lidar_values()
         nb = 0
-        nb_rays_practical = min_nb_rays / 5
-        for ray in range(0,len(lidar_data),5):
+        nb_rays_practical = min_nb_rays // 5
+        for ray in range(0,nb_rays_practical,5):
 
-            if ray < SMALL_VALUE: nb += 1
+            if lidar_data[ray] < SMALL_VALUE: nb += 1
             if nb > min_nb_rays: return True
 
         return False
@@ -152,15 +152,9 @@ class Pilot:
 
                 if last_drone_angle is not None and abs(last_drone_angle - semantic_data[elt].angle) < min_angle_difference: continue
 
-                last_drone_angle = semantic_data[elt].angle
+                last_drone_angle = semantic_data[elt].angle # prevents us from computing force multiple times if multiple rays hit the same drone
 
-                #if self.drone.has_priority:
-#
-                #    force = WALL_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
-                #    unit_vector_angle = semantic_data[elt].angle + np.pi
-                #    total_rad_repulsion += force * np.cos(unit_vector_angle) # if drone has priority, we just slow it down but dont deviate it
-
-                if not self.drone.has_priority:
+                if not self.drone.has_priority: # drones who have priority don't deviate from their trajectories because of other drones
 
                     force = DRONE_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
                     unit_vector_angle = semantic_data[elt].angle + np.pi + epsilon_range * (2 * random() - 1) # unstuck the drones by adding a small random deviation angle
@@ -172,14 +166,14 @@ class Pilot:
 
                     lidar_data[i % 180] = 400
 
-            if semantic_data[elt].entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER and self.drone.grasped_wounded_persons():
+        # Rescue center should not exert a force on a drone that is rescuing
+            if semantic_data[elt].entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER and self.drone.grasped_wounded_persons(): 
 
                 if list_rays_rescue == []: list_rays_rescue = [semantic_data[elt].angle]
                 elif len(list_rays_rescue) == 1: list_rays_rescue.append(semantic_data[elt].angle)
                 else:
                     list_rays_rescue[-1] = semantic_data[elt].angle
 
-        # removes repulsive force from rescue center when rescuing
         if len(list_rays_rescue) == 2:
 
             corresponding_first_index = round(np.rad2deg(list_rays_rescue[0])) // 2 + 90
@@ -213,158 +207,6 @@ class Pilot:
         return total_rad_repulsion, total_orthor_repulsion
 
 
-    def repulsive_force_new(self, total_correction_norm:float = 0.3) -> tuple:
-        '''
-        returns a radial and an orthoradial component of a repulsive force that helps with preventing collisions with surroundings
-        
-        :param self: self
-        :param total_correction_norm: An (optional) float describing the force exerted on the drone
-        :type force: int
-        :return: (radial, orthoradial)
-        :rtype: tuple
-        '''
-        total_rad_repulsion = 0
-        total_orthor_repulsion = 0
-
-        lidar_data = self.drone.lidar_values()
-        semantic_data = self.drone.semantic_values()
-        ray_angles = self.drone.lidar_rays_angles()
-
-        for elt in range (len(lidar_data)):
-
-            if lidar_data[elt] < 90:
-
-                WALL_CONSTANT = 300 if self.drone.state == 'DISPERSING' else 1
-                force = WALL_CONSTANT / lidar_data[elt] ** 2 
-                unit_vector_angle = ray_angles[elt] + math.pi
-
-                total_rad_repulsion += force * np.cos(unit_vector_angle)
-                total_orthor_repulsion += force *np.sin(unit_vector_angle)
-
-        # 2. SEMANTIC ENTITIES AVOIDANCE & ATTRACTION
-        if semantic_data is not None:
-            for elt in semantic_data:
-                
-                # A. ATTRACTION LOGIC: Pull towards wounded (Rescuing) or Base (Returning)
-                if (elt.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and self.drone.state == 'RESCUING') or \
-                   (self.drone.state == 'RETURNING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER):
-                    force = 0.1 # 1/10
-                    total_rad_repulsion += force * np.cos(elt.angle)
-                    total_orthor_repulsion += force * np.sin(elt.angle)
-                
-                # B. [NEW] REPULSION LOGIC: Push away from Rescue Center during warmup
-                elif self.drone.state == 'DISPERSING' and elt.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER:
-                    dist = max(elt.distance, 1.0)
-                    force = 3000.0 / (dist ** 2) # Strong repulsive force to clear the base
-                    push_angle = elt.angle + math.pi # Point in the opposite direction
-                    total_rad_repulsion += force * np.cos(push_angle)
-                    total_orthor_repulsion += force * np.sin(push_angle)
-
-        #total_orthor_repulsion = min(0.7, total_orthor_repulsion)
-        #total_rad_repulsion = min(0.7, total_rad_repulsion)
-
-        # DRONE-TO-DRONE AVOIDANCE & PRIORITY YIELDING
-        my_pos = self.drone.estimated_pos
-        my_angle = self.drone.estimated_angle
-        am_i_vip = self.drone.grasped_wounded_persons() # Am I carrying a victim?
-
-        vip_relative = []     # List of (distance, angle) of VIP drones
-        normal_relative = []  # List of (distance, angle) of Normal drones
-
-        # A. Gather from Semantic Sensor (Highest Precision, Range: 200px)
-        if semantic_data is not None:
-            temp_drones = []
-            temp_grasped_persons = []
-            
-            # 1. Classify data
-            for data in semantic_data:
-                if data.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
-                    temp_drones.append(data)
-                elif data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and getattr(data, 'grasped', False):
-                    temp_grasped_persons.append(data)
-            
-            # 2. Filter and match
-            for drone_data in temp_drones:
-                is_vip_drone = False
-                
-                # Compare drone with victim grasped
-                for person_data in temp_grasped_persons:
-                    dist_diff = abs(drone_data.distance - person_data.distance)
-                    angle_diff = abs(normalize_angle(drone_data.angle - person_data.angle))
-                    
-                    if dist_diff < 30.0 and angle_diff < 0.2:
-                        is_vip_drone = True
-                        break
-                
-                if is_vip_drone:
-                    vip_relative.append((drone_data.distance, drone_data.angle))
-                else:
-                    normal_relative.append((drone_data.distance, drone_data.angle))
-
-        # B. Gather from Communicator (Long Range: 250px, Fallback)
-        if hasattr(self.drone.comms, 'list_vip_drones'):
-            for v_pos in self.drone.comms.list_vip_drones:
-                dist = math.hypot(v_pos[0] - my_pos[0], v_pos[1] - my_pos[1])
-                # Only use comms data if they are outside semantic range to avoid double-counting
-                if dist > 180.0 and dist < 250.0: 
-                    angle_global = math.atan2(v_pos[1] - my_pos[1], v_pos[0] - my_pos[0])
-                    angle_local = normalize_angle(angle_global - my_angle)
-                    vip_relative.append((dist, angle_local))
-            
-            for n_pos in self.drone.comms.list_nearby_drones:
-                dist = math.hypot(n_pos[0] - my_pos[0], n_pos[1] - my_pos[1])
-                if dist > 180.0 and dist < 250.0:
-                    angle_global = math.atan2(n_pos[1] - my_pos[1], n_pos[0] - my_pos[0])
-                    angle_local = normalize_angle(angle_global - my_angle)
-                    normal_relative.append((dist, angle_local))
-
-        # C. Apply Forces based on Social Hierarchy
-        K_DRONE = 1000 if self.drone.state == 'DISPERSING' else 200 # Base repulsion constant
-        # if self.drone.state == 'DISPERSING': print(K_DRONE)
-        
-        # Normal Drones pushing us
-        if not am_i_vip: 
-            # VIP ignores normal drones completely, straight path home!
-            for dist, angle in normal_relative:
-                if dist < 200.0: 
-                    dist = max(dist, 1)
-                    force = K_DRONE / (dist ** 2)
-                    push_angle = normalize_angle(angle + math.pi)
-                    if abs(angle) < 0.3 or abs(normalize_angle(angle - math.pi)) < 0.3:
-                        push_angle += 0.5
-                    total_rad_repulsion += force * np.cos(push_angle)
-                    total_orthor_repulsion += force * np.sin(push_angle)
-
-        # VIP Drones pushing us
-        for dist, angle in vip_relative:
-            if dist < 250.0:
-                if am_i_vip:
-                    # VIP vs VIP: Normal symmetric push to resolve deadlocks
-                    dist = max(dist, 1)
-                    force = K_DRONE / (dist ** 2)
-                else:
-                    # Normal vs VIP: HUGE PUSH. Normal drone yields heavily.
-                    dist = max(dist, 1)
-                    force = (K_DRONE * 5.0) / (dist ** 2)
-                    # Add a slight backward brake to yield effectively
-                    total_rad_repulsion -= 0.5 * force 
-                
-                push_angle = normalize_angle(angle + math.pi)
-                if abs(angle) < 0.3 or abs(normalize_angle(angle - math.pi)) < 0.3:
-                        push_angle += 0.5
-                total_rad_repulsion += force * np.cos(push_angle)
-                total_orthor_repulsion += force * np.sin(push_angle)
-
-        actual_norm_correction = math.hypot(total_rad_repulsion,total_orthor_repulsion)
-        if actual_norm_correction < 0.001: return 0,0
-
-        MAX_REPULSION = 1.5
-        if actual_norm_correction > MAX_REPULSION:
-            total_rad_repulsion *= MAX_REPULSION / actual_norm_correction
-            total_orthor_repulsion *= MAX_REPULSION / actual_norm_correction
-
-        return (total_rad_repulsion, total_orthor_repulsion)
-
     def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.8) -> CommandsDict:
         
         '''
@@ -388,7 +230,7 @@ class Pilot:
         '''
         
         if repulsive_force_bool:
-            corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm) # soft movement
+            corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm)
             forward += corr1
             lateral += corr2
 
@@ -477,10 +319,10 @@ class Pilot:
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
-            print(f'{self.drone.identifier} {self.drone.state} front_grasp_alignment_command_pilot')
+            #print(f'{self.drone.identifier} {self.drone.state} front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
-        print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
+        #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
         return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
