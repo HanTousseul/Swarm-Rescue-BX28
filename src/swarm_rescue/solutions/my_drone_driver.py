@@ -29,7 +29,7 @@ class MyStatefulDrone(DroneAbstract):
 
         # Config
         misc_data = kwargs.get('misc_data')
-        self.max_timesteps = 2700 
+        self.max_timesteps = 7200 
         self.map_size = (1113, 750) 
         if misc_data:
             self.max_timesteps = misc_data.max_timestep_limit
@@ -87,17 +87,15 @@ class MyStatefulDrone(DroneAbstract):
         
         self.cnt_timestep += 1
         
-        print(self.state, self.comms.everyone_home)
         if self.comms.everyone_home and self.state == 'END_GAME': 
-            print(f'{self.identifier} STOPPING')
-            self.state == 'STOP'
+            self.state = 'STOP'
 
         # --- STATE: STOP --- (At the end, when everyone is inside the return area, everyone should stop moving)
-        if self.state =='STOP': 
+        if self.state == 'STOP' and self.is_inside_return_area: 
             
-            print(True, 'stopping')
             return self.pilot.move_function(forward=0, lateral=0, rotation=0, grasper=0, repulsive_force_bool=False)
 
+        if self.state =='STOP': self.state == 'RETURNING'
         # 1. SENSING
 
         semantic_data = self.semantic_values() 

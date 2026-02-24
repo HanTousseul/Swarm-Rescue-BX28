@@ -130,7 +130,7 @@ class Pilot:
         exponent_drone = 2.3
         epsilon_range = 0.2 # when evading a drone, we add a random epsilon angle to our deviation, it is chosen in (-epsilon_range, epsilon_range)
         rays_discard_lidar_drone = 2
-        end_game_coefficient = 0.3
+        end_game_coefficient = 0.1
 
         lidar_data = self.drone.lidar_values()
         semantic_data = self.drone.semantic_values()
