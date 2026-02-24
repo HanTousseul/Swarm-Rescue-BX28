@@ -51,16 +51,82 @@ class Pilot:
 
         angle_error = normalize_angle(wounded.angle)
         abs_error = abs(angle_error)
+        side_sign = 1.0 if (self.drone.identifier is None or self.drone.identifier % 2 == 0) else -1.0
 
-        align_threshold = math.radians(10.0)
-        grasp_distance = 32.0
+        align_threshold = math.radians(12.0)
+        grasp_distance = 34.0
 
+        # Overtake mode: if we are almost perfectly behind a moving victim, push harder
+        # and add a tiny lateral bias so we do not stay in the exact same lane forever.
+        if abs_error < math.radians(11.0) and wounded.distance > 24.0:
+            overtake_speed = float(np.clip(0.74 + 0.005 * wounded.distance, 0.74, 1.0))
+            return {
+                "forward": overtake_speed,
+                "lateral": float(0.24 * side_sign),
+                "rotation": float(np.clip(2.8 * angle_error, -0.9, 0.9)),
+                "grasper": 0
+            }
+
+        # Keep moving while aligning so we do not trail behind moving victims.
         if abs_error > align_threshold:
-            return self.move_function(forward = 0, lateral = 0, rotation = float(np.clip(3.0 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
+            moving_align_speed = float(np.clip(0.44 + 0.006 * wounded.distance, 0.44, 0.92))
+            return {
+                "forward": moving_align_speed,
+                "lateral": 0.0,
+                "rotation": float(np.clip(3.4 * angle_error, -1.0, 1.0)),
+                "grasper": 0
+            }
 
         if wounded.distance > grasp_distance:
-            approach_speed = float(np.clip(0.15 + 0.006 * (wounded.distance - grasp_distance), 0.15, 0.45))
-            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True)
+            approach_speed = float(np.clip(0.52 + 0.009 * (wounded.distance - grasp_distance), 0.52, 1.0))
+            return {
+                "forward": approach_speed,
+                "lateral": 0.0,
+                "rotation": float(np.clip(2.2 * angle_error, -0.75, 0.75)),
+                "grasper": 0
+            }
+
+        return {
+            "forward": 0.14,
+            "lateral": 0.0,
+            "rotation": float(np.clip(2.0 * angle_error, -0.7, 0.7)),
+            "grasper": 1
+        }
+
+    def calculate_repulsive_force(self):
+        """Calculates repulsive force to avoid colliding with other drones."""
+        total_lat = 0.0
+        semantic_data = self.drone.semantic_values()
+        if not semantic_data: return 0.0, 0.0
+
+        for data in semantic_data:
+            if data.entity_type == DroneSemanticSensor.TypeEntity.DRONE:
+                dist = data.distance
+                if 0.1 < dist < 150.0:
+                    K = 500.0 
+                    force_magnitude = K / (dist ** 2)
+                    force_magnitude = min(1.5, force_magnitude)
+                    push_angle = data.angle + math.pi - 0.5 
+                    total_lat += force_magnitude * math.sin(push_angle)
+        return 0.0, total_lat
+
+    def calculate_wall_repulsion(self, aggressive: bool = False, angle_error: float = 0.0):
+        """Calculates repulsive forces from walls using Lidar."""
+        lidar = self.drone.lidar_values()
+        angles = self.drone.lidar_rays_angles()
+        if lidar is None or angles is None: return 0.0, 1.0 
+
+        total_lat = 0.0
+        min_dist_detected = 300.0
+
+        if aggressive:
+            K_wall = 120.0; ignore_dist = 40.0; critical_dist = 10.0; slow_down_threshold = 40.0
+        else:
+            K_wall = 350.0; ignore_dist = 80.0; critical_dist = 20.0; slow_down_threshold = 60.0
+
+        # Smart Repulsion: Reduce push if aiming at a gap
+        if abs(angle_error) < 0.2:
+            K_wall *= 0.4
 
         return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
 
@@ -340,7 +406,18 @@ class Pilot:
         else:
             base_forward = self.drone.MAX_SPEED * alignment_factor
 
-        # --- [NEW] Only reduce suddenly angle changing, not reduce speed ---
+        # Catch-up boost while rescuing moving targets.
+        if self.drone.state == "RESCUING" and not self.drone.grasped_wounded_persons():
+            wounded = self._nearest_visible_wounded()
+            if wounded is not None and 18.0 < wounded.distance < 170.0:
+                # Stronger boost at medium range, lighter near latch distance.
+                if wounded.distance > 70.0:
+                    base_forward = min(1.0, base_forward + 0.16)
+                else:
+                    base_forward = min(1.0, base_forward + 0.10)
+
+        # --- [NEW] CHỈ GIẢM XÓC TAY LÁI, KHÔNG HÃM TỐC ĐỘ ---
+        # Giúp lướt mượt qua hành lang nhưng vẫn giữ nguyên đà tiến
         lidar_values = self.drone.lidar_values()
         if lidar_values is not None and min(lidar_values) < 60.0:
             if abs(angle_error) < 0.5:
@@ -361,6 +438,11 @@ class Pilot:
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
-        #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
-        #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
-        return self.move_function(forward = forward_cmd, lateral = float(np.clip(repulsion_orthor, -1.0, 1.0)), rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = False)
+        ## print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
+
+        return {
+            "forward": float(forward_cmd),
+            "lateral": float(np.clip(repulsion_orthor, -1.0, 1.0)),
+            "rotation": float(rotation_cmd),
+            "grasper": int(grasper_val)
+        }

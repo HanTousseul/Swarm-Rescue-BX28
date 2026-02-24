@@ -15,7 +15,10 @@ from swarm_rescue.solutions.victim_manager import VictimManager
 
 
 
-
+# CONSTANTS 
+STUCK_TIME_EXPLORING = 50 #(timestep)
+STUCK_TIME_OTHER = 70 #(timestep)
+MAX_SPEED = 0.95 #in [0,1]
 
 class MyStatefulDrone(DroneAbstract):
     """
@@ -74,6 +77,7 @@ class MyStatefulDrone(DroneAbstract):
         self.preferred_angle = None
         self.safe_dispersion_reached_tick = None
         self.panic_timer = 0
+        self.circular_chase_ticks = 0
 
     def control(self) -> CommandsDict:
         """
@@ -279,6 +283,7 @@ class MyStatefulDrone(DroneAbstract):
         # --- STATE: RESCUING ---
         elif self.state == "RESCUING":
             dist_to_target = 9999
+            visible_wounded = False
             if self.current_target is not None:
                 dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target)
             if dist_to_target < 70: self.rescue_time += 1
@@ -288,18 +293,62 @@ class MyStatefulDrone(DroneAbstract):
                     # if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON:
                     #     print(f'Debug type: {data.entity_type}, grasped: {data.grasped}!')
                     if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON and not data.grasped:
+                        visible_wounded = True
                         angle_global = self.estimated_angle + data.angle
-                        best_safe_dist = 20.0 
-                        check_range = np.arange(max(0.0, data.distance - 20.0), 0, -10.0)
-                        for d in check_range:
-                            cx = self.estimated_pos[0] + d * math.cos(angle_global)
-                            cy = self.estimated_pos[1] + d * math.sin(angle_global)
-                            if self.nav.obstacle_map.get_cost_at(np.array([cx, cy])) < 300.0:
-                                best_safe_dist = d; break
-                        safe_vx = self.estimated_pos[0] + best_safe_dist * math.cos(angle_global)
-                        safe_vy = self.estimated_pos[1] + best_safe_dist * math.sin(angle_global)
-                        self.current_target = np.array([safe_vx, safe_vy])
+                        obs_vx = self.estimated_pos[0] + data.distance * math.cos(angle_global)
+                        obs_vy = self.estimated_pos[1] + data.distance * math.sin(angle_global)
+                        observed_pos = np.array([obs_vx, obs_vy])
+
+                        # Intercept moving victims: aim ahead instead of pure chase.
+                        predicted_pos = self.victim_manager.predict_intercept_point(
+                            drone_pos=self.estimated_pos,
+                            observed_victim_pos=observed_pos,
+                        )
+                        victim_vel = self.victim_manager.get_velocity_for_position(observed_pos)
+                        victim_speed = np.linalg.norm(victim_vel)
+                        side_sign = 1.0 if (self.identifier is None or self.identifier % 2 == 0) else -1.0
+                        cutoff_point = None
+
+                        # Move to a safe grasp approach point close to predicted intercept.
+                        if victim_speed > 0.06:
+                            travel_dir = victim_vel / victim_speed
+                            # Detect persistent "behind target" chasing and force a hard cut across.
+                            rel = self.estimated_pos - observed_pos
+                            behind_target = float(np.dot(rel, travel_dir)) < -6.0
+                            if behind_target and data.distance > 28.0:
+                                self.circular_chase_ticks += 1
+                            else:
+                                self.circular_chase_ticks = max(0, self.circular_chase_ticks - 1)
+
+                            if self.circular_chase_ticks >= 6:
+                                perp = np.array([-travel_dir[1], travel_dir[0]])
+                                cutoff_point = predicted_pos + 34.0 * travel_dir + 26.0 * side_sign * perp
+
+                            # Small "push" ahead of trajectory to avoid circular tail-chase.
+                            catch_point = predicted_pos + 30.0 * travel_dir
+                        else:
+                            self.circular_chase_ticks = max(0, self.circular_chase_ticks - 2)
+                            vec_to_pred = predicted_pos - self.estimated_pos
+                            dist_to_pred = np.linalg.norm(vec_to_pred)
+                            if dist_to_pred > 1e-6:
+                                unit_dir = vec_to_pred / dist_to_pred
+                                catch_point = predicted_pos - 10.0 * unit_dir
+                            else:
+                                catch_point = predicted_pos
+
+                        # Keep target in traversable space. Fall back from catch -> predicted -> observed.
+                        if cutoff_point is not None and self.nav.obstacle_map.get_cost_at(cutoff_point) < 300.0:
+                            self.current_target = cutoff_point
+                        elif self.nav.obstacle_map.get_cost_at(catch_point) < 300.0:
+                            self.current_target = catch_point
+                        elif self.nav.obstacle_map.get_cost_at(predicted_pos) < 300.0:
+                            self.current_target = predicted_pos
+                        else:
+                            self.current_target = observed_pos
                         break 
+
+            if not visible_wounded:
+                self.circular_chase_ticks = max(0, self.circular_chase_ticks - 2)
 
             # Rescue Timeout
             if self.rescue_time >= 50:
@@ -314,6 +363,7 @@ class MyStatefulDrone(DroneAbstract):
             # Successful Grasp
             if self.grasped_wounded_persons():
                 self.rescue_time = 0; self.state = "RETURNING"
+                self.circular_chase_ticks = 0
                 self.victim_manager.delete_victim_at(self.estimated_pos)
                 self.current_target = self.initial_position
                 if self.current_target is None and self.rescue_center_pos is not None:
@@ -361,18 +411,36 @@ class MyStatefulDrone(DroneAbstract):
 
         if self.current_target is not None:
             dist = np.linalg.norm(self.estimated_pos - self.current_target)
-            if len(self.nav.current_astar_path) == 0 and dist > 40.0:
-                self.path_fail_count += 1 
-                if self.path_fail_count > 30:
-                    print(f"[{self.identifier}] ❌ Path failed.")
-                    
-                    # Only blaclist if not returning
-                    if self.state != "RETURNING":
-                        print("   -> Blacklisting target.")
-                        self.blacklisted_targets.append(self.current_target)
-                    
-                    self.blacklist_timer = 200
-                    self.current_target = None
+            
+            USE_DIRECT_PID = False
+            if self.state == "RESCUING" and dist < 360.0:
+                if self.nav.obstacle_map.check_line_of_sight(self.estimated_pos, self.current_target, safety_radius=1, check_cost=False):
+                    USE_DIRECT_PID = True
+            
+            if USE_DIRECT_PID:
+                next_waypoint = self.current_target
+                self.path_fail_count = 0
+            else:
+                if len(self.nav.current_astar_path) == 0 and dist > 40.0:
+                    self.path_fail_count += 1 
+                    if self.path_fail_count > 30:
+                        print(f"[{self.identifier}] ❌ Path failed.")
+                        
+                        # Only blaclist if not returning
+                        if self.state != "RETURNING":
+                            print("   -> Blacklisting target.")
+                            self.blacklisted_targets.append(self.current_target)
+                        
+                        self.blacklist_timer = 200
+                        self.current_target = None
+                        self.path_fail_count = 0
+                        
+                        # Check grasper
+                        keep_grasping = 1 if self.grasped_wounded_persons() else 0
+                        
+                        # Turn to unstuck
+                        return {"forward": 0.0, "lateral": 0.0, "rotation": 1.0, "grasper": keep_grasping} 
+                else:
                     self.path_fail_count = 0
                     
                     # Check grasper
@@ -494,5 +562,3 @@ class MyStatefulDrone(DroneAbstract):
         
         return_dict = self.comms.create_new_message()
         return return_dict
-
-    
