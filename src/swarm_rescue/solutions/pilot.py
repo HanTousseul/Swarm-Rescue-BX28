@@ -130,7 +130,7 @@ class Pilot:
         exponent_drone = 2.3
         epsilon_range = 0.2 # when evading a drone, we add a random epsilon angle to our deviation, it is chosen in (-epsilon_range, epsilon_range)
         rays_discard_lidar_drone = 2
-        rays_discard_lidar_wounded = 4
+        end_game_coefficient = 0.3
 
         lidar_data = self.drone.lidar_values()
         semantic_data = self.drone.semantic_values()
@@ -204,6 +204,11 @@ class Pilot:
         # scales down the repulsive force
         total_rad_repulsion *= total_correction_norm
         total_orthor_repulsion *= total_correction_norm
+
+        if self.drone.state == 'END_GAME' and self.drone.is_inside_return_area:
+
+            total_rad_repulsion *= end_game_coefficient
+            total_orthor_repulsion *= end_game_coefficient 
         
         return total_rad_repulsion, total_orthor_repulsion
 
@@ -384,7 +389,6 @@ class Pilot:
         
         if repulsive_force_bool:
             corr1, corr2 = self.repulsive_force(total_correction_norm = total_correction_norm) # soft movement
-            print(f'{self.drone.identifier} {(corr1,corr2),(forward,lateral)}')
             forward += corr1
             lateral += corr2
 

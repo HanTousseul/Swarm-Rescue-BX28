@@ -106,7 +106,7 @@ class MyStatefulDrone(DroneAbstract):
             self.initial_position = self.estimated_pos.copy()
             print(f"[{self.identifier}] 🏁 STARTED.")
 
-        print(self.cnt_timestep)
+        if self.cnt_timestep % 100 == 0: print(self.cnt_timestep)
         # 3. Locate Rescue Center
         check_center = False
         if semantic_data:
@@ -122,7 +122,6 @@ class MyStatefulDrone(DroneAbstract):
                         tmp = dist_to_center
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
-        print(f'{self.identifier} {self.drone_health}')
         # Debug visualization
         if self.cnt_timestep % 5 == 0:
             self.nav.obstacle_map.display(
