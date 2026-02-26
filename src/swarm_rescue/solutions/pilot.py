@@ -317,16 +317,6 @@ class Pilot:
         rotation_cmd = KP_ROT * angle_error
         rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
 
-        # 3. Wall Avoidance
-        repulsion_rad, repulsion_orthor = self.repulsive_force()
-
-        if abs(angle_error) > 0.5 and not is_reversing:
-            repulsion_orthor += -0.5 * np.sign(angle_error)
-
-        if is_final_approach:
-            repulsion_orthor = 0.0          
-            repulsion_rad = 0.5
-
         # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
         alignment_factor = max(0.2, math.cos(angle_error) ** 2)
 
@@ -359,17 +349,16 @@ class Pilot:
         # Keep wall-shield behavior consistent when reversing.
         if not is_reversing:
             # Forward motion: keep thrust and repulsion signs unchanged.
-            forward_cmd = base_forward + repulsion_rad
+            forward_cmd = base_forward
         else:
             # Reverse motion: flip thrust only, keep wall-repulsion direction.
-            forward_cmd = -base_forward + repulsion_rad
+            forward_cmd = -base_forward
             
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
 
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
-            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 

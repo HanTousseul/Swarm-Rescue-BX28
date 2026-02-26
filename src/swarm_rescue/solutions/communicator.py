@@ -134,7 +134,7 @@ class CommunicatorHandler:
         
         else: victim = None
         if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
-            # # print('Sent map!')
+            # print('Sent map!')
             obstacle_map = self.drone.nav.obstacle_map.grid  
         else: obstacle_map = None
 
