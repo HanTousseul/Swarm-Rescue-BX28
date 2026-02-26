@@ -239,6 +239,14 @@ class MyStatefulDrone(DroneAbstract):
         #         current_path=self.nav.current_astar_path, 
         #         window_name=f"Map - Drone {self.identifier}"
         #     )
+        # # Debug visualization
+        # if self.cnt_timestep % 5 == 0:
+        #     self.nav.obstacle_map.display(
+        #         self.estimated_pos, 
+        #         current_target=self.current_target,
+        #         current_path=self.nav.current_astar_path, 
+        #         window_name=f"Map - Drone {self.identifier}"
+        #     )
 
         # 4. Receive and process messages
 
@@ -576,3 +584,5 @@ class MyStatefulDrone(DroneAbstract):
         """Create the outgoing message payload for nearby teammates."""
         return_dict = self.comms.create_new_message()
         return return_dict
+
+    

@@ -320,6 +320,9 @@ class Pilot:
         # 3. Wall Avoidance
         repulsion_rad, repulsion_orthor = self.repulsive_force()
 
+        if abs(angle_error) > 0.5 and not is_reversing:
+            repulsion_orthor += -0.5 * np.sign(angle_error)
+
         if is_final_approach:
             repulsion_orthor = 0.0          
             repulsion_rad = 0.5
@@ -366,6 +369,7 @@ class Pilot:
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
+            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
