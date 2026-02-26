@@ -15,6 +15,7 @@ class Pilot:
     - Relaxed Grasping: Allow grasping even with slight misalignment.
     """
     def __init__(self, drone):
+        """Store the drone reference and initialize controller memory."""
         self.drone = drone
         self.last_pos = None
         self.current_speed = 0.0
@@ -52,18 +53,27 @@ class Pilot:
 
         angle_error = normalize_angle(wounded.angle)
         abs_error = abs(angle_error)
+        side_sign = 1.0 if (self.drone.identifier is None or self.drone.identifier % 2 == 0) else -1.0
 
-        align_threshold = math.radians(10.0)
-        grasp_distance = 32.0
+        align_threshold = math.radians(12.0)
+        grasp_distance = 34.0
 
+        # Overtake mode: if we are almost perfectly behind a moving victim, push harder
+        # and add a tiny lateral bias so we do not stay in the exact same lane forever.
+        if abs_error < math.radians(11.0) and wounded.distance > 24.0:
+            overtake_speed = float(np.clip(0.74 + 0.005 * wounded.distance, 0.74, 1.0))
+            return self.move_function(forward = overtake_speed, lateral = float(0.24 * side_sign), rotation = float(np.clip(2.8 * angle_error, -0.9, 0.9)), grasper = 0, repulsive_force_bool = True)
+
+        # Keep moving while aligning so we do not trail behind moving victims.
         if abs_error > align_threshold:
-            return self.move_function(forward = 0, lateral = 0, rotation = float(np.clip(3.0 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
+            moving_align_speed = float(np.clip(0.44 + 0.006 * wounded.distance, 0.44, 0.92))
+            return self.move_function(forward = moving_align_speed, lateral = 0, rotation = float(np.clip(3.4 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
 
         if wounded.distance > grasp_distance:
-            approach_speed = 0.5
-            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True)
+            approach_speed = float(np.clip(0.52 + 0.009 * (wounded.distance - grasp_distance), 0.52, 1.0))
+            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.2 * angle_error, -0.75, 0.75)), grasper = 0, repulsive_force_bool = True)
 
-        return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
+        return self.move_function(forward = 0.14, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.7, 0.7)), grasper = 1, repulsive_force_bool = True)
 
     def low_battery(self) -> None:
         '''
@@ -155,7 +165,23 @@ class Pilot:
 
                 last_drone_angle = semantic_data[elt].angle # prevents us from computing force multiple times if multiple rays hit the same drone
 
-                if not self.drone.has_priority: # drones who have priority don't deviate from their trajectories because of other drones
+
+
+
+                # Need to come back to this (MARC)
+
+
+
+
+                if not self.drone.grasped_wounded_persons(): # drones who have priority don't deviate from their trajectories because of other drones
+
+
+
+
+                # Need to come back to this (MARC)
+
+
+
 
                     force = DRONE_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
                     unit_vector_angle = semantic_data[elt].angle + np.pi + epsilon_range * (2 * random() - 1) # unstuck the drones by adding a small random deviation angle
@@ -294,9 +320,6 @@ class Pilot:
         # 3. Wall Avoidance
         repulsion_rad, repulsion_orthor = self.repulsive_force()
 
-        if abs(angle_error) > 0.5 and not is_reversing:
-            repulsion_orthor += -0.5 * np.sign(angle_error)
-
         if is_final_approach:
             repulsion_orthor = 0.0          
             repulsion_rad = 0.5
@@ -307,23 +330,35 @@ class Pilot:
         # 5. Active Braking & Approach
         BRAKE_DIST = 120.0 
         if dist_to_target < BRAKE_DIST:
-            # [FIXED] Tăng mức tối thiểu từ 0.15 lên 0.4 để có đủ lực "ủi" vào bãi đỗ
+            # Keep enough minimum thrust close to target to avoid stall near drop zone.
             base_forward = max(0.4, dist_to_target * 0.03) 
             base_forward *= alignment_factor
             if self.current_speed > 4.0: base_forward = -0.4 
         else:
             base_forward = self.drone.MAX_SPEED * alignment_factor
 
-        # --- [NEW] Only reduce suddenly angle changing, not reduce speed ---
+        # Catch-up boost while rescuing moving targets.
+        if self.drone.state == "RESCUING" and not self.drone.grasped_wounded_persons():
+            wounded = self._nearest_visible_wounded()
+            if wounded is not None and 18.0 < wounded.distance < 170.0:
+                # Stronger boost at medium range, lighter near latch distance.
+                if wounded.distance > 70.0:
+                    base_forward = min(1.0, base_forward + 0.16)
+                else:
+                    base_forward = min(1.0, base_forward + 0.10)
+
+        # Dampen steering oscillations in tight corridors without reducing thrust.
         lidar_values = self.drone.lidar_values()
         if lidar_values is not None and min(lidar_values) < 60.0:
             if abs(angle_error) < 0.5:
                 rotation_cmd *= 0.5
 
-        # --- Fix error adding wrong force when go back ---
+        # Keep wall-shield behavior consistent when reversing.
         if not is_reversing:
+            # Forward motion: keep thrust and repulsion signs unchanged.
             forward_cmd = base_forward + repulsion_rad
         else:
+            # Reverse motion: flip thrust only, keep wall-repulsion direction.
             forward_cmd = -base_forward + repulsion_rad
             
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
@@ -362,13 +397,13 @@ class Pilot:
         
         # 1. Active Repulsion: Push away from peers, walls, and Rescue Center
         if self.drone.safe_dispersion_reached_tick is None:
-            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} move_function 1')
+            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} dispersion move_function 1 pilot')
             return self.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
 
         
         # 2. Scanning Mode: Spin to map surroundings (Rescue Center) with Lidar
         elif self.drone.cnt_timestep < self.drone.safe_dispersion_reached_tick + 50: 
-            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} move_function 21')
+            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} dispersion move_function 21 pilot')
             return self.move_function(forward=0, lateral=0, rotation=1, grasper=0, repulsive_force_bool=True)
         
         # 3. Lock Natural Escape Angle & Transition to Exploring

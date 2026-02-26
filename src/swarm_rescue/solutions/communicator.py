@@ -64,9 +64,7 @@ class CommunicatorHandler:
 
             if content['everyone_home']: self.everyone_home = True
         
-        print('nb_drones_returned',self.drone.identifier, nb_drones_returned, self.everyone_home)
         if nb_drones_returned == len(self.drone.communicator.received_messages) and not self.everyone_home: 
-            print(f'{self.drone.identifier} everyone home')
             self.everyone_home = True
         else: self.everyone_home = False
         if not drone_with_bigger_priority: self.has_priority = True
