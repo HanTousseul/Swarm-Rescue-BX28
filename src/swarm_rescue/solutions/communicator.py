@@ -86,9 +86,9 @@ class CommunicatorHandler:
                 
         self.list_victims_taken_care_of = valid_taken_care_of
         
-        # print('nb_drones_returned',self.drone.identifier, nb_drones_returned, self.everyone_home)
+        # # print('nb_drones_returned',self.drone.identifier, nb_drones_returned, self.everyone_home)
         if nb_drones_returned == len(self.drone.communicator.received_messages) and not self.everyone_home: 
-            print(f'{self.drone.identifier} everyone home')
+            # # print(f'{self.drone.identifier} everyone home')
             self.everyone_home = True
         else: self.everyone_home = False
         if not drone_with_bigger_priority: self.has_priority = True
@@ -163,8 +163,8 @@ class CommunicatorHandler:
         if victim is not None:
             dist_to_victim = float(np.linalg.norm(self.drone.estimated_pos - victim))
 
-        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
-            # print('Sent map!')
+        if self.drone.cnt_timestep % 31 == self.drone.identifier * 3:
+            # # print('Sent map!')
             obstacle_map = self.drone.nav.obstacle_map.grid  
         else: obstacle_map = None
 

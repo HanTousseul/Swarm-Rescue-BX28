@@ -58,7 +58,7 @@ class MyStatefulDrone(DroneAbstract):
         self.STUCK_TIME_EXPLORING = 50 
         self.STUCK_TIME_OTHER = 70 
         self.MAX_SPEED = 0.9 
-        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
+        self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.21)
         
         self.floodfill_cooldown = 0
         self.preferred_angle = None
@@ -106,20 +106,20 @@ class MyStatefulDrone(DroneAbstract):
         # Record Initial Position
         if self.cnt_timestep == 1:
             self.initial_position = self.estimated_pos.copy()
-            print(f"[{self.identifier}] 🏁 MISSION STARTED.")
+            # print(f"[{self.identifier}] 🏁 MISSION STARTED.")
 
         # ================= 2. COMMUNICATION =================
         self.comms.process_incoming_messages()
-        # print(f"List victim taken care of: {self.comms.list_victims_taken_care_of}")
+        # # print(f"List victim taken care of: {self.comms.list_victims_taken_care_of}")
 
         # Debug visualization
-        if self.cnt_timestep % 5 == 0:
-            self.nav.obstacle_map.display(
-                self.estimated_pos, 
-                current_target=self.current_target,
-                current_path=self.nav.current_path, 
-                window_name=f"Map - Drone {self.identifier}"
-            )
+        # if self.cnt_timestep % 5 == 0:
+        #     self.nav.obstacle_map.display(
+        #         self.estimated_pos, 
+        #         current_target=self.current_target,
+        #         current_path=self.nav.current_path, 
+        #         window_name=f"Map - Drone {self.identifier}"
+        #     )
 
         # ================= 3. STATE MACHINE =================
 
@@ -148,50 +148,44 @@ class MyStatefulDrone(DroneAbstract):
                 W, H = self.map_size
                 sx, sy = self.initial_position
                 
-                # 1. Measure distance from spawn point to the 4 map boundaries
-                # (Assuming map center is (0,0), bounds are -W/2 to W/2 and -H/2 to H/2)
-                dist_L = sx - (-W / 2.0)
-                dist_R = (W / 2.0) - sx
-                dist_T = sy - (-H / 2.0)
-                dist_B = (H / 2.0) - sy
+                # 1. Chuẩn hóa vị trí về khoảng [-1, 1] để biết ta đang ở đâu so với TÂM
+                nx = sx / (W / 2.0)
+                ny = sy / (H / 2.0)
                 
-                vx, vy = 0.0, 0.0
-                MARGIN = 200.0 # Distance threshold (px) to consider a wall "close"
+                # Cắt (Clamp) để đề phòng lỗi tràn số
+                nx = max(-1.0, min(1.0, nx))
+                ny = max(-1.0, min(1.0, ny))
                 
-                # 2. Create repulsion vector - Face away from the closest walls
-                if dist_L < MARGIN: vx += 1.0
-                if dist_R < MARGIN: vx -= 1.0
-                if dist_T < MARGIN: vy += 1.0
-                if dist_B < MARGIN: vy -= 1.0
+                # Tính xem có đang ở "Vùng ven" (Outer 40% của bản đồ) không
+                is_near_x_edge = abs(nx) > 0.6
+                is_near_y_edge = abs(ny) > 0.6
                 
                 TOTAL_DRONES = 10 
-                safe_id = self.identifier % TOTAL_DRONES # Prevent out-of-bounds just in case
+                safe_id = self.identifier % TOTAL_DRONES
                 
-                # 3. Calculate Fan Spread and assign individual angles
-                if vx == 0.0 and vy == 0.0:
-                    # Case 1: Spawned in the center of the map -> 360-degree circular spread
+                # 2. Tính toán Độ Mở (Spread) và Chia góc
+                if not is_near_x_edge and not is_near_y_edge:
+                    # Trường hợp 1: Spawn ở giữa map -> Xòe quạt tròn 360 độ
                     self.preferred_angle = (safe_id / TOTAL_DRONES) * 2 * math.pi
                 else:
-                    # Case 2: Spawned near an edge or corner -> Directed fan spread
-                    base_angle = math.atan2(vy, vx)
-                    walls_touching = abs(vx) + abs(vy)
+                    # Trường hợp 2: Spawn ở vùng ven -> Lấy TÂM BẢN ĐỒ (0,0) làm chuẩn!
+                    # Hướng từ (sx, sy) về (0,0) luôn là hướng thoáng nhất, không bao giờ đâm tường.
+                    base_angle = math.atan2(-sy, -sx)
                     
-                    if walls_touching >= 2.0:
-                        # Corner spawn (e.g., Bottom-Left): 90-degree physical corner -> 80-degree fan (0.44 pi)
+                    if is_near_x_edge and is_near_y_edge:
+                        # Ở góc map -> Quạt hẹp 80 độ (0.44 pi)
                         spread = math.pi * 0.44 
                     else:
-                        # Edge spawn (e.g., Left wall): 180-degree physical wall -> 140-degree fan (0.77 pi)
+                        # Ở cạnh map -> Quạt rộng 140 độ (0.77 pi)
                         spread = math.pi * 0.77 
                         
                     start_angle = base_angle - (spread / 2.0)
-                    
-                    # Distribute angles evenly among the 10 drones
                     self.preferred_angle = start_angle + (safe_id / max(1, (TOTAL_DRONES - 1))) * spread
                     
-                # Normalize angle to [-pi, pi] to avoid math errors in scoring algorithms
+                # Chuẩn hóa góc về [-pi, pi]
                 self.preferred_angle = math.atan2(math.sin(self.preferred_angle), math.cos(self.preferred_angle))
 
-                print(f"[{self.identifier}] 🚀 SMART DISPERSION. Target Angle: {math.degrees(self.preferred_angle):.0f}°. To EXPLORING.")
+                # print(f"[{self.identifier}] 🚀 SMART DISPERSION. Target Angle: {math.degrees(self.preferred_angle):.0f}°. To EXPLORING.")
                 self.state = "EXPLORING"
 
         # --- SYSTEM CHECKS: BATTERY & PANIC MODE ---
@@ -214,7 +208,7 @@ class MyStatefulDrone(DroneAbstract):
             if not getattr(self.nav.obstacle_map, 'panic_mode', False):
                 self.nav.obstacle_map.panic_mode = True
                 self.nav.obstacle_map.update_cost_map() 
-                print(f"[{self.identifier}] 🚨 PANIC MODE ON: Flattening Cost Map to escape narrow corridor!")
+                # print(f"[{self.identifier}] 🚨 PANIC MODE ON: Flattening Cost Map to escape narrow corridor!")
                 
         else:
             # 3. [NEW] SAFE EXIT CHECK
@@ -238,7 +232,7 @@ class MyStatefulDrone(DroneAbstract):
                 if safe_to_relax:
                     self.nav.obstacle_map.panic_mode = False
                     self.nav.obstacle_map.update_cost_map() 
-                    print(f"[{self.identifier}] 😌 PANIC MODE OFF: Wide space reached, normal navigation resumed.")
+                    # print(f"[{self.identifier}] 😌 PANIC MODE OFF: Wide space reached, normal navigation resumed.")
 
         # 4. Emergency wiggle maneuver
         if is_currently_stuck:
@@ -253,6 +247,31 @@ class MyStatefulDrone(DroneAbstract):
             else: 
                 self.blacklisted_targets = []
 
+            if self.current_target is not None:
+                dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target)
+                arrived_close = (dist_to_target < 35.0)
+                
+                gx, gy = self.nav.obstacle_map.world_to_grid(self.current_target[0], self.current_target[1])
+                cell_value = self.nav.obstacle_map.grid[gy, gx] if 0 <= gx < self.nav.obstacle_map.grid_w and 0 <= gy < self.nav.obstacle_map.grid_h else 0.0
+                
+                target_obstructed = (cell_value > 10.0)
+                
+                # Check for Stale Target (Area already explored by teammates)
+                target_stale = True
+                search_radius = 2 # 5x5 window
+                for dy in range(-search_radius, search_radius + 1):
+                    for dx in range(-search_radius, search_radius + 1):
+                        ny, nx = gy + dy, gx + dx
+                        if 0 <= nx < self.nav.obstacle_map.grid_w and 0 <= ny < self.nav.obstacle_map.grid_h:
+                            if -0.1 < self.nav.obstacle_map.grid[ny, nx] < 5.0:
+                                target_stale = False
+                                break
+                    if not target_stale: break
+
+                if arrived_close or target_obstructed or target_stale:
+                    self.current_target = None
+                    self.nav.current_path = []
+
             # Priority 1: Check for known victims
             best_victim_pos = self.victim_manager.get_nearest_victim(self.estimated_pos, self.blacklisted_targets)
             self.current_target_best_victim_pos = best_victim_pos
@@ -260,7 +279,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.current_target = best_victim_pos
                 self.state = "RESCUING"
                 self.path_fail_count = 0 
-                print(f"[{self.identifier}] 🚑 RESCUING VICTIM at {best_victim_pos}")
+                # print(f"[{self.identifier}] 🚑 RESCUING VICTIM at {best_victim_pos}")
 
             # Priority 2: Find Frontier via Floodfill
             if self.state == "EXPLORING": 
@@ -299,7 +318,7 @@ class MyStatefulDrone(DroneAbstract):
                         is_still_valid = True; break
                 
                 if is_taken or not is_still_valid:
-                    print(f"[{self.identifier}] 🛑 Target rescued by teammate. Aborting rescue!")
+                    # print(f"[{self.identifier}] 🛑 Target rescued by teammate. Aborting rescue!")
                     self.current_target = None
                     self.state = 'EXPLORING'
                     self.nav.current_path = []
@@ -318,7 +337,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.state = 'EXPLORING'
                 self.nav.current_path = []
                 self.rescue_time = 0
-                print(f"[{self.identifier}] Change to EXPLORING!")
+                # print(f"[{self.identifier}] Change to EXPLORING!")
                 return self.pilot.move_function(forward=0, lateral=0, rotation=0, grasper=0, repulsive_force_bool=True)
             
             # Successful Grasp
@@ -327,7 +346,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.state = "RETURNING"
                 self.victim_manager.delete_victim_at(self.estimated_pos)
                 self.current_target = self.initial_position if self.initial_position is not None else self.rescue_center_pos
-                print(f"[{self.identifier}] ✅ VICTIM SECURED. Returning to Base.")
+                # print(f"[{self.identifier}] ✅ VICTIM SECURED. Returning to Base.")
 
         # --- STATE: RETURNING & DROPPING ---
         elif self.state == "RETURNING":
@@ -346,7 +365,7 @@ class MyStatefulDrone(DroneAbstract):
                 self.drop_step = 0
                 self.nav.current_path = []
                 self.current_target = None
-                print(f"[{self.identifier}] ⏬ VICTIM DROPPED. Resuming Exploration.")
+                # print(f"[{self.identifier}] ⏬ VICTIM DROPPED. Resuming Exploration.")
                 self.state = "EXPLORING" 
                 return self.pilot.move_function(forward=0, lateral=0, rotation=0, grasper=0, repulsive_force_bool=True)              
             return self.pilot.move_to_target_carrot()
@@ -368,8 +387,8 @@ class MyStatefulDrone(DroneAbstract):
             if len(self.nav.current_path) == 0 and dist > 40.0:
                 self.path_fail_count += 1 
                 if self.path_fail_count > 30:
-                    print(f"[{self.identifier}] ❌ PATHFINDING FAILED. Blacklisting target.")
-                    if self.state != "RETURNING":
+                    # print(f"[{self.identifier}] ❌ PATHFINDING FAILED. Blacklisting target.")
+                    if self.state != "RETURNING" and self.state != "RESCUING":
                         self.blacklisted_targets.append(self.current_target)
                     
                     self.blacklist_timer = 200
@@ -383,34 +402,6 @@ class MyStatefulDrone(DroneAbstract):
             
             # Request route from Navigator
             next_waypoint = self.nav.get_next_waypoint(self.current_target)
-
-        # --- Robust Arrival Check for Exploring ---
-        if self.state == "EXPLORING" and self.current_target is not None:
-            dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target)
-            arrived_close = (dist_to_target < 35.0)
-            
-            gx, gy = self.nav.obstacle_map.world_to_grid(self.current_target[0], self.current_target[1])
-            cell_value = self.nav.obstacle_map.grid[gy, gx] if 0 <= gx < self.nav.obstacle_map.grid_w and 0 <= gy < self.nav.obstacle_map.grid_h else 0.0
-            
-            target_obstructed = (cell_value > 10.0)
-            
-            # Check for Stale Target (Area already explored by teammates)
-            target_stale = True
-            search_radius = 2 # 5x5 window
-            for dy in range(-search_radius, search_radius + 1):
-                for dx in range(-search_radius, search_radius + 1):
-                    ny, nx = gy + dy, gx + dx
-                    if 0 <= nx < self.nav.obstacle_map.grid_w and 0 <= ny < self.nav.obstacle_map.grid_h:
-                        if -0.1 < self.nav.obstacle_map.grid[ny, nx] < 5.0:
-                            target_stale = False
-                            break
-                if not target_stale: break
-
-            if arrived_close or target_obstructed or target_stale:
-                self.current_target = None
-                self.nav.current_path = []
-                grasper_state = 1 if self.grasped_wounded_persons() else 0
-                return self.pilot.move_function(forward=0, lateral=0, rotation=0, grasper=grasper_state, repulsive_force_bool=True)
 
         # --- Handle Route Blockages during Active Mission ---
         elif self.state in ["RETURNING", "RESCUING"] and self.current_target is not None:

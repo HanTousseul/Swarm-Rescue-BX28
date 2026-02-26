@@ -191,7 +191,7 @@ class Navigator:
             start_pos = self.drone.pos_history_long[0]
             dist_moved = np.linalg.norm(self.drone.estimated_pos - start_pos)
             if dist_moved < 8.0:
-                print(f"[{self.drone.identifier}] ⚠️ STUCK. Initiating Smart Unstuck...")
+                # print(f"[{self.drone.identifier}] ⚠️ STUCK. Initiating Smart Unstuck...")
                 return True
         return False
 
@@ -287,7 +287,7 @@ class Navigator:
             carrot_wp = path[carrot_idx]
             
             # Use a thicker safety radius (e.g., 2 cells) to account for the drone's physical width.
-            if self.obstacle_map.check_line_of_sight(self.drone.estimated_pos, carrot_wp, safety_radius=2, check_cost=False):
+            if self.obstacle_map.check_line_of_sight(self.drone.estimated_pos, carrot_wp, safety_radius=1, check_cost=False):
                 break  # A clear, safe trajectory to the carrot is confirmed.
                 
             carrot_idx -= 1 # Line of sight is blocked; pull the target closer.
@@ -335,7 +335,7 @@ class Navigator:
                 # Thresholds: > 9000 indicates a lethal collision course based on updated Lidar data.
                 cost_threshold = 9000.0 if self.drone.state == 'EXPLORING' else 8000.0
                 if cost > cost_threshold: 
-                    print(f"[{self.drone.identifier}] ⚠️ Path Blocked at step {i}. Cost: {cost:.1f}")
+                    # print(f"[{self.drone.identifier}] ⚠️ Path Blocked at step {i}. Cost: {cost:.1f}")
                     path_blocked = True
                     break
             
@@ -425,7 +425,7 @@ class Navigator:
 
         # [NEW] CATCH THE DETACHED PATH
         if carrot_wp is None:
-            print(f"[{self.drone.identifier}] ✂️ PATH DETACHED (Behind Wall). Clearing path.")
+            # print(f"[{self.drone.identifier}] ✂️ PATH DETACHED (Behind Wall). Clearing path.")
             self.current_path = []
             self.last_astar_target = None
             return None # Activate Fast Unstuck in Driver!

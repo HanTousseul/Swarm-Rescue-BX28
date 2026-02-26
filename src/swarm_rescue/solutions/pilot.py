@@ -74,7 +74,7 @@ class Pilot:
 
         if self.drone.steps_remaining <= self.drone.RETURN_TRIGGER_STEPS:
             if self.drone.state not in ["RETURNING", "DROPPING", "END_GAME"]:
-                print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
+                # print(f"[{self.drone.identifier}] 🔋 LOW BATTERY. Returning.")
                 self.drone.state = "RETURNING"
                 self.drone.current_target = None
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
@@ -121,10 +121,11 @@ class Pilot:
         total_orthor_repulsion = 0
 
         # Base wall constants (kept small to allow smooth navigation in open/tight spaces)
+        BASE_WALL_CONSTANT = 0
         if self.is_in_tight_area():
-            BASE_WALL_CONSTANT = 0.02
+            BASE_WALL_CONSTANT = 0.015
         else:
-            BASE_WALL_CONSTANT = 0.007
+            BASE_WALL_CONSTANT = 0.006
             
         DRONE_CONSTANT = .1
         quotient_rad_repulsion = 4
@@ -222,16 +223,24 @@ class Pilot:
                 # --- [NEW] ANTI-CRUSH SURVIVAL INSTINCT ---
                 # Dynamically spike the wall force if pushed dangerously close to the wall.
                 if dist < 25.0:
-                    effective_wall_constant = BASE_WALL_CONSTANT * 10.0 # Emergency bounce!
+                    if self.drone.state == "RESCUING" or self.is_in_tight_area():
+                        effective_wall_constant = BASE_WALL_CONSTANT * 1.5
+                    else:
+                        effective_wall_constant = BASE_WALL_CONSTANT * 10.0 # Emergency bounce!
                 elif dist < 50.0:
-                    effective_wall_constant = BASE_WALL_CONSTANT * 3.0  # Strong warning
+                    if self.drone.state == "RESCUING":
+                        effective_wall_constant = BASE_WALL_CONSTANT * 1.0
+                    else:
+                        effective_wall_constant = BASE_WALL_CONSTANT * 3.0  # Strong warning
                 else:
                     effective_wall_constant = BASE_WALL_CONSTANT        # Normal smooth flight
                 
-                check_victim_around = False
-                for data in self.drone.semantic_values():
-                    if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON: check_victim_around = True
-                if self.drone.state == "RESCUING" and check_victim_around: effective_wall_constant = 0
+                if self.drone.state == "RETURNING": effective_wall_constant = 0
+
+                # check_victim_around = False
+                # for data in self.drone.semantic_values():
+                #     if data.entity_type == DroneSemanticSensor.TypeEntity.WOUNDED_PERSON: check_victim_around = True
+                # if self.drone.state == "RESCUING" and check_victim_around: effective_wall_constant = 0
                 force = effective_wall_constant / (dist / 100) ** exponent_wall
                 
                 angle_lidar = normalize_angle(ray_angles[elt])
@@ -373,10 +382,10 @@ class Pilot:
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
-            #print(f'{self.drone.identifier} {self.drone.state} front_grasp_alignment_command_pilot')
+            ## print(f'{self.drone.identifier} {self.drone.state} front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
-        #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
-        #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
+        ## print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
+        ## print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
         return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
