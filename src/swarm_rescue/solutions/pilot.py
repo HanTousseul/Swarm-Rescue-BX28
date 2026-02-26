@@ -4,6 +4,7 @@ from swarm_rescue.simulation.drone.controller import CommandsDict
 from swarm_rescue.simulation.utils.utils import normalize_angle
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 from random import random
+
 class Pilot:
     """
     Low-level Flight Controller.
@@ -53,14 +54,14 @@ class Pilot:
         abs_error = abs(angle_error)
 
         align_threshold = math.radians(10.0)
-        grasp_distance = 20
+        grasp_distance = 32.0
 
         if abs_error > align_threshold:
             return self.move_function(forward = 0, lateral = 0, rotation = float(np.clip(3.0 * angle_error, -1.0, 1.0)), grasper = 0, repulsive_force_bool = True)
 
         if wounded.distance > grasp_distance:
-            approach_speed = 0.5    
-            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True, total_correction_norm = 0.2)
+            approach_speed = 0.5
+            return self.move_function(forward = approach_speed, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 0, repulsive_force_bool = True)
 
         return self.move_function(forward = 0.06, lateral = 0, rotation = float(np.clip(2.0 * angle_error, -0.6, 0.6)), grasper = 1, repulsive_force_bool = True)
 
@@ -102,11 +103,11 @@ class Pilot:
 
         return False
 
-    def repulsive_force(self, total_correction_norm:float) -> tuple:
+    def repulsive_force(self, total_correction_norm:float = 0.8) -> tuple:
 
         '''
-        Takes care of the returning when little timesteps are left. Mainly changes drone states
-        
+        This function handles collision evading of drones, be it with walls or with other drones. It also takes into account rescuing and returning states so as to make repulsion force weaker
+                
         :param self: self
         :param total_correction_norm: a coefficient by which we multiply the force at the end to scale it down. given value is determined empirically
         :type total_correction_norm: float
@@ -223,7 +224,7 @@ class Pilot:
         :type grasper: int
         :param repulsive_force_bool: whether or not to generate evasive repulsive force
         :type repulsive_force_bool: bool
-        :param total_correction_norm: norm of the repulsive (correction) force (given value is 0.3)
+        :param total_correction_norm: norm of the repulsive (correction) force
         :type total_correction_norm: float
         :return: {"forward", "lateral", "rotation", "grasper"}
         :rtype: CommandsDict
@@ -291,7 +292,11 @@ class Pilot:
         rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
 
         # 3. Wall Avoidance
-        repulsion_rad, repulsion_orthor = 0,0
+        repulsion_rad, repulsion_orthor = self.repulsive_force()
+
+        if abs(angle_error) > 0.5 and not is_reversing:
+            repulsion_orthor += -0.5 * np.sign(angle_error)
+
         if is_final_approach:
             repulsion_orthor = 0.0          
             repulsion_rad = 0.5
@@ -302,24 +307,31 @@ class Pilot:
         # 5. Active Braking & Approach
         BRAKE_DIST = 120.0 
         if dist_to_target < BRAKE_DIST:
-            base_forward = max(0.15, dist_to_target * 0.03) 
+            # [FIXED] Tăng mức tối thiểu từ 0.15 lên 0.4 để có đủ lực "ủi" vào bãi đỗ
+            base_forward = max(0.4, dist_to_target * 0.03) 
             base_forward *= alignment_factor
             if self.current_speed > 4.0: base_forward = -0.4 
         else:
             base_forward = self.drone.MAX_SPEED * alignment_factor
-        
-        forward_cmd = base_forward + repulsion_rad
 
-        if is_reversing: forward_cmd = -forward_cmd
+        # --- [NEW] Only reduce suddenly angle changing, not reduce speed ---
+        lidar_values = self.drone.lidar_values()
+        if lidar_values is not None and min(lidar_values) < 60.0:
+            if abs(angle_error) < 0.5:
+                rotation_cmd *= 0.5
+
+        # --- Fix error adding wrong force when go back ---
+        if not is_reversing:
+            forward_cmd = base_forward + repulsion_rad
+        else:
+            forward_cmd = -base_forward + repulsion_rad
+            
         forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
-
-        if abs(angle_error) > 0.5 and not is_reversing:
-            repulsion_orthor += -0.5 * np.sign(angle_error)
 
         # 7. Front-approach grasp logic during rescue
         front_grasp_cmd = self.front_grasp_alignment_command()
         if front_grasp_cmd is not None:
-            #print(f'{self.drone.identifier} {self.drone.state} front_grasp_alignment_command_pilot')
+            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
             return front_grasp_cmd
 
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0

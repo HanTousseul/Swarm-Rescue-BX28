@@ -6,6 +6,7 @@ MAPPING_REFRESH_RATE = 200 # in timesteps, time between updates to the map by th
 
 class CommunicatorHandler:
     def __init__(self, drone):
+        """Initialize communication state for one drone."""
         self.drone = drone
         self.comm_counter = 0 
         self.map_date_update = [0 for i in range (10)] #timestep of last map update given by a certain drone
