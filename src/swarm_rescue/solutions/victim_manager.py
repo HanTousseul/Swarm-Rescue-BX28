@@ -114,7 +114,7 @@ class VictimManager:
                 best_pos = record['pos']
         return best_pos
 
-    def delete_victim_at(self, position, radius=100.0):
+    def delete_victim_at(self, position, radius=20.0):
         """
         Removes a victim from the registry at a specific location.
         Used when a victim is rescued or identified as a 'ghost' (sensor noise).

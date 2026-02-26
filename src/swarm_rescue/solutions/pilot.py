@@ -326,3 +326,46 @@ class Pilot:
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
         #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
         return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
+    
+
+    def dispersion(self):
+
+        '''Handles the event where the drone's state is "DISPERSING": evades other drones and eventually switches to "EXPLORING"
+        
+        :return: Calls move function or changes state
+        :rtype: CommandsDict
+        '''
+        # Initialize a memory variable to track when safe distance is reached
+            
+        dx = self.drone.estimated_pos[0] - self.drone.initial_position[0]
+        dy = self.drone.estimated_pos[1] - self.drone.initial_position[1]
+        dist_moved = math.hypot(dx, dy)
+        
+        # Check if we have fulfilled the escape conditions
+        if self.drone.safe_dispersion_reached_tick is None:
+            # Condition: Run for at least 50 ticks AND exceed 150px safe distance.
+            # Safety Timeout: Force escape at 200 ticks to prevent infinite deadlock.
+            if (self.drone.cnt_timestep >= 50 and dist_moved >= 150.0) or self.drone.cnt_timestep >= 1:
+                self.drone.safe_dispersion_reached_tick = self.drone.cnt_timestep
+        
+        # 1. Active Repulsion: Push away from peers, walls, and Rescue Center
+        if self.drone.safe_dispersion_reached_tick is None:
+            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} move_function 1')
+            return self.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
+
+        
+        # 2. Scanning Mode: Spin to map surroundings (Rescue Center) with Lidar
+        elif self.drone.cnt_timestep < self.drone.safe_dispersion_reached_tick + 50: 
+            if self.drone.print_move_functions: print(f'{self.drone.identifier} {self.drone.state} move_function 21')
+            return self.move_function(forward=0, lateral=0, rotation=1, grasper=0, repulsive_force_bool=True)
+        
+        # 3. Lock Natural Escape Angle & Transition to Exploring
+        else:
+            if dist_moved > 5.0:
+                self.drone.preferred_angle = math.atan2(dy, dx)
+            else: 
+                self.drone.preferred_angle = self.drone.estimated_angle
+                
+            deg_angle = math.degrees(self.drone.preferred_angle)
+            print(f"[{self.drone.identifier}] 🚀 WARMUP DONE. Dist: {dist_moved:.1f}px. Angle: {deg_angle:.1f}°. EXPLORING!")
+            self.drone.state = "EXPLORING"
