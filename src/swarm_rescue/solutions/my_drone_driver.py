@@ -557,7 +557,7 @@ class MyStatefulDrone(DroneAbstract):
                     # Use Pilot's repulsive force (boosted to 0.8) to push away
                     print(f'[{self.identifier}] STUCK, trying to push from wall')
                     if self.print_move_functions: print(f'{self.identifier} {self.state} move_function 13')
-                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = int(grasper), repulsive_force_bool= True)
+                    return self.pilot.move_function(forward= 0, lateral = 0, rotation= 0.8, grasper = int(grasper), repulsive_force_bool= True, total_correction_norm= 1.5)
             
             # Fallback if no wall is nearby (stuck for other reasons)
             if self.print_move_functions: print(f'{self.identifier} {self.state} move_function 14')

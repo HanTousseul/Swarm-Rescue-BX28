@@ -2,6 +2,7 @@ import math
 import heapq
 import numpy as np
 import cv2
+import time
 from typing import List, Tuple, Optional
 
 # --- CONFIGURATION ---
@@ -12,6 +13,8 @@ VAL_OBSTACLE = 2.0  # Lidar hit an obstacle
 VAL_FREE = -2.0     # Confirmed free space (Trajectory)
 THRESHOLD_MIN = -50.0
 THRESHOLD_MAX = 50.0
+PRINT_DEBUGGING_STATEMENTS:bool = False
+DELTA_TIME_SLOW = 10*-2
 
 class GridMap:
     """
@@ -19,10 +22,11 @@ class GridMap:
     Handles lidar updates, cost map generation, pathfinding algorithms (A*, Dijkstra),
     and frontier exploration logic.
     """
-    def __init__(self, map_size: Tuple[int, int], resolution: int = RESOLUTION):
+    def __init__(self, drone, map_size: Tuple[int, int], resolution: int = RESOLUTION):
         self.map_width = map_size[0]
         self.map_height = map_size[1]
         self.resolution = resolution
+        self.drone = drone
         # Initialize grid dimensions
         self.grid_w = int(self.map_width / self.resolution) + 1
         self.grid_h = int(self.map_height / self.resolution) + 1
@@ -34,28 +38,7 @@ class GridMap:
         self.cost_map = None
         self.dijkstra_grid = None
         self.panic_mode = False 
-
-        # === PRE-ALLOCATED ARRAYS FOR COST MAP ===
-        # Boolean mask for obstacle detection
-        self.obstacle_mask_bool = np.zeros((self.grid_h, self.grid_w), dtype=bool)
-        # uint8 masks for OpenCV operations
-        self.obstacle_mask = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
-        self.closed_obstacles = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
-        self.binary_grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
-        self.eroded_grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
-        # Distance map (float)
-        self.dist_map = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
-        
-        # Morphological kernels
-        self.closing_kernel = np.ones((3, 3), np.uint8)
-        self.erosion_kernel = np.ones((3, 3), np.uint8)
-        
-        # Distance transform settings
-        self.dist_transform_type = cv2.DIST_L2
-        self.dist_transform_mask = 5
-        
-        # Change detection
-        self._last_grid = None
+        self.last_timestep_ran_update_cost_map = -1
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """Converts world coordinates (cm) to grid indices (x, y)."""
         gx = int((x + self.offset_x) / self.resolution)
@@ -75,6 +58,7 @@ class GridMap:
         Updates the grid map using Lidar raycasting.
         Filters out obstacles caused by other drones or victims to keep the map static.
         """
+        print(self.drone.identifier, 'mapping update_from_lidar')
         if lidar_data is None or lidar_angles is None: return
         cx, cy = self.world_to_grid(drone_pos[0], drone_pos[1])
         update_layer = np.zeros_like(self.grid)
@@ -121,6 +105,8 @@ class GridMap:
         self.update_cost_map()
 
     def update_from_trajectory(self, trajectory_points: List[Tuple[float, float]]):
+        print(self.drone.identifier, 'mapping update_from_trajectory')
+        t0 =time.time()
         if not trajectory_points or len(trajectory_points) < 2: return
         for i in range(len(trajectory_points) - 1):
             p1 = trajectory_points[i]
@@ -129,58 +115,63 @@ class GridMap:
             gx2, gy2 = self.world_to_grid(p2[0], p2[1])
             cv2.line(self.grid, (gx1, gy1), (gx2, gy2), VAL_FREE, thickness=2)
         self.grid = np.clip(self.grid, THRESHOLD_MIN, THRESHOLD_MAX)
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('gupdate_from_trajectory: DELTA TIME = ',t1-t0)
 
     def update_cost_map(self):
-        """Highly optimized cost map generation"""
+        """Generates a Cost Map using Distance Transform. High cost near walls."""
+
+        if self.drone.cnt_timestep == self.last_timestep_ran_update_cost_map: return  
+        print(self.drone.identifier, 'mapping update_cost_map')
+        t0 = time.time()
+        # 1. CREATE VIRTUAL CONCRETE MASK (Do not modify self.grid directly)
+        # Filter out solid walls (Values > 10.0)
+        obstacle_mask = (self.grid > 10.0).astype(np.uint8)
         
-        # Skip if no changes (requires grid change detection)
-        if hasattr(self, '_last_grid') and np.array_equal(self.grid, self._last_grid):
-            return
-        self._last_grid = self.grid.copy()
+        # Use a 3x3 kernel (approx 24cm) to seal dotted walls (e.g., fences) 
+        # without unintentionally blocking real narrow doors.
+        closing_kernel = np.ones((3, 3), np.uint8)
         
-        # Reuse pre-allocated arrays
-        np.greater(self.grid, 10.0, out=self.obstacle_mask_bool)
-        np.copyto(self.obstacle_mask, self.obstacle_mask_bool.astype(np.uint8))
+        # Apply Morphological Close to bridge small gaps between obstacles
+        closed_obstacles = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, closing_kernel)
         
-        # Morphological close (unavoidable allocation)
-        self.closed_obstacles = cv2.morphologyEx(
-            self.obstacle_mask, 
-            cv2.MORPH_CLOSE, 
-            self.closing_kernel
-        )
+        # 2. GENERATE SAFETY MAP FROM THE NEW MASK
+        # Invert the mask: 1 = free space, 0 = wall (including virtual concrete)
+        binary_grid = (1 - closed_obstacles).astype(np.uint8)
         
-        # In-place binary operations
-        np.subtract(1, self.closed_obstacles, out=self.binary_grid, dtype=np.uint8)
-        cv2.erode(self.binary_grid, self.erosion_kernel, dst=self.eroded_grid, iterations=1)
+        # Erode the free space slightly to maintain a safety margin from the walls
+        kernel = np.ones((3, 3), np.uint8) 
+        eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
         
-        # Distance transform
-        cv2.distanceTransform(
-            self.eroded_grid, 
-            self.dist_transform_type, 
-            self.dist_transform_mask,
-            dst=self.dist_map
-        )
+        # Calculate distance from each free cell to the nearest wall
+        self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
         
-        # Vectorized cost calculation
-        safety_weight = 10.0 if self.panic_mode else 60.0
-        robot_radius = 1.0 if self.panic_mode else 1.5
-        unknown_penalty = 10.0 if self.panic_mode else 100.0
+        # Calculate base cost: Inversely proportional to the distance from obstacles
+        SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
+        self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
         
-        # Single pass for cost calculation
-        with np.errstate(divide='ignore', invalid='ignore'):
-            self.cost_map = 1.0 + safety_weight / (self.dist_map + 0.1)
-        
-        # Combined masks for penalties (single pass through memory)
-        lethal_mask = self.dist_map < robot_radius
+        # 3. APPLY LETHAL RADIUS AND PENALTIES
+        # Shrink lethal radius (1.5 grids ~ 12cm) to allow squeezing through pillars and tight corridors
+        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 1.5 
+        self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
+
+        # Heavily penalize unknown areas (based on the original unaltered self.grid)
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
-        obstacle_mask_final = (self.closed_obstacles == 1) | (self.grid > 20.0)
+        UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
+        self.cost_map[unknown_mask] += UNKNOWN_PENALTY
         
-        # Apply all penalties (vectorized)
-        self.cost_map[lethal_mask] = 9999.0
-        self.cost_map[unknown_mask] += unknown_penalty
-        self.cost_map[obstacle_mask_final] = 9999.0
+        # Strictly lock Cost = 9999.0 on actual walls OR areas sealed by the virtual concrete
+        self.cost_map[closed_obstacles == 1] = 9999.0
+        self.cost_map[self.grid > 20.0] = 9999.0
+
+        self.last_timestep_ran_update_cost_map = self.drone.cnt_timestep
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW : print('update_cost_map: DELTA TIME = ',t1-t0)
 
     def get_dijkstra_path(self, current_pos: np.ndarray, max_steps: int = 40) -> List[np.ndarray]:
+
+        t0 = time.time()
+        print(self.drone.identifier, 'mapping get_dijkstra_path')
         if not hasattr(self, 'dijkstra_grid') or self.dijkstra_grid is None: return []
         cx, cy = self.world_to_grid(current_pos[0], current_pos[1])
         path = [] 
@@ -203,9 +194,13 @@ class GridMap:
                 path.append(np.array([wx, wy]))
                 if min_val <= 0.0: break
             else: break
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('get_dijkstra_path: DELTA TIME = ',t1-t0)
         return path
 
     def find_path_astar(self, start_pos: np.ndarray, end_pos: np.ndarray) -> List[np.ndarray]:
+        t0 = time.time()
+        print(self.drone.identifier, 'mapping find_path_astar')
         sx, sy = self.world_to_grid(start_pos[0], start_pos[1])
         ex, ey = self.world_to_grid(end_pos[0], end_pos[1])
         self.update_cost_map()
@@ -240,9 +235,13 @@ class GridMap:
                         h = math.hypot(ex - nx, ey - ny) 
                         heapq.heappush(open_list, (new_g + h, nx, ny))
                         came_from[(nx, ny)] = (cx, cy)
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('find_path_astar: DELTA TIME = ',t1-t0)        
         return []
     
     def update_dijkstra_map(self, target_pos: np.ndarray):
+        t0 =time.time()
+        print(self.drone.identifier, 'mapping update_dijkstra_map')
         self.update_cost_map()
         self.dijkstra_grid = np.full_like(self.grid, np.inf)
         gx_t, gy_t = self.world_to_grid(target_pos[0], target_pos[1])
@@ -278,6 +277,9 @@ class GridMap:
                         self.dijkstra_grid[ny, nx] = new_val
                         heapq.heappush(pq, (new_val, nx, ny))
 
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('update_dijkstra_map: DELTA TIME = ',t1-t0)        
+
     def get_reachable_frontier_and_path(self, drone_pos: np.ndarray, drone_angle: float, preferred_angle: float = 0.0, initial_pos: Optional[np.ndarray] = None, rescue_center_pos: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
         """
         Dijkstra Flood Fill with Advanced Scoring:
@@ -287,6 +289,8 @@ class GridMap:
            The penalty decays as the drone moves further from its initial position.
         4. Fallback: If no far targets, accept close ones.
         """
+        print(self.drone.identifier, 'mapping get_reachable_frontier_and_path')
+        t0 = time.time()
         start_gx, start_gy = self.world_to_grid(drone_pos[0], drone_pos[1])
         
         dist_matrix = np.full((self.grid_h, self.grid_w), float('inf'))
@@ -459,13 +463,17 @@ class GridMap:
             if curr is None: break 
         path.reverse()
         best_target_world = np.array(self.grid_to_world(best_gx, best_gy))
-        
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('get_reachable_frontier_and_path: DELTA TIME = ',t1-t0)        
+
         return best_target_world, path
 
     # ... (Keep other fallback functions: get_unknown_target, get_random_free_target, check_line_of_sight, get_cost_at, display, mask_rescue_center)
     # Ensure they are present as before.
     def get_unknown_target(self, drone_pos: np.ndarray, nearby_drones: List[np.ndarray] = []) -> Optional[np.ndarray]:
         """Fallback: Sample random unknown points if no clear frontier is found."""
+        print(self.drone.identifier, 'mapping get_unknown_target')
+        t0 = time.time()
         unknown_indices = np.argwhere(np.abs(self.grid) < 5.0)
         if len(unknown_indices) == 0: return None
         num_samples = min(len(unknown_indices), 50)
@@ -480,10 +488,14 @@ class GridMap:
                 if d < min_dist_to_friend: min_dist_to_friend = d
             score = min_dist_to_friend 
             if score > max_score: max_score = score; best_target = np.array([wx, wy])
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('get_unknown_target: DELTA TIME = ',t1-t0) 
         return best_target
 
     def get_random_free_target(self, drone_pos: np.ndarray, min_dist: float = 200.0) -> Optional[np.ndarray]:
         """Ultimate Fallback: Go to a random known free space."""
+        t0= time.time()
+        print(self.drone.identifier, 'mapping get_random_free_target')
         free_indices = np.argwhere(self.grid < -40.0)
         if len(free_indices) == 0: return None
         np.random.shuffle(free_indices)
@@ -491,10 +503,15 @@ class GridMap:
             wx, wy = self.grid_to_world(gx, gy)
             dist = math.hypot(wx - drone_pos[0], wy - drone_pos[1])
             if dist > min_dist: return np.array([wx, wy])
+
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('get_random_free_target: DELTA TIME = ',t1-t0) 
         return None
 
     def check_line_of_sight(self, start_pos: np.ndarray, end_pos: np.ndarray, safety_radius: int = 1, check_cost: bool = True) -> bool:
         """Checks if a direct line between two points is clear of obstacles."""
+        t0 =time.time()
+        print(self.drone.identifier, 'mapping check_line_of_sight')
         x0, y0 = start_pos; x1, y1 = end_pos
         dist = math.hypot(x1 - x0, y1 - y0)
         if dist < 1.0: return True 
@@ -511,6 +528,10 @@ class GridMap:
                         if self.grid[ny, nx] > 10.0: return False
                         if check_cost and hasattr(self, 'cost_map') and self.cost_map is not None:
                             if self.cost_map[ny, nx] > SAFE_COST_THRESHOLD: return False
+                    
+        t1 = time.time()
+        if PRINT_DEBUGGING_STATEMENTS and t1-t0 > DELTA_TIME_SLOW: print('check_line_of_sight: DELTA TIME = ',t1-t0) 
+        
         return True
 
     def get_cost_at(self, world_pos: np.ndarray) -> float:
@@ -522,6 +543,7 @@ class GridMap:
 
     def display(self, drone_pos: np.ndarray, current_target: Optional[np.ndarray] = None, current_path: List[np.ndarray] = [], window_name="Obstacle Map"):
         """Debug function to visualize the map using OpenCV."""
+        print(self.drone.identifier, 'mapping display')
         normalized_grid = (self.grid - THRESHOLD_MIN) / (THRESHOLD_MAX - THRESHOLD_MIN)
         normalized_grid = np.clip(normalized_grid, 0.0, 1.0) * 255.0
         norm_grid = normalized_grid.astype(np.uint8)

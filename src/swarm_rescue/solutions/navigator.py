@@ -21,7 +21,7 @@ class Navigator:
         self.gps_last_known = None
         
         map_size = getattr(self.drone, 'map_size', (100, 100))
-        self.obstacle_map = GridMap(map_size=map_size)
+        self.obstacle_map = GridMap(drone = self.drone, map_size=map_size)
         
         self.current_astar_path = []
         self.last_astar_target = None 
@@ -187,7 +187,7 @@ class Navigator:
                 # (Wall thật là > 2000, vùng đệm là 300-1000)
                 cost_threshold = 8000.0 if self.drone.state == 'EXPLORING' else 9000.0
                 if cost > cost_threshold: 
-                    print(f"!!! Path Blocked at step {i}. Cost: {cost:.1f}")
+                    print(f"[{self.drone.identifier}]!!! Path Blocked at step {i}. Cost: {cost:.1f}")
                     path_blocked = True
                     break
             

@@ -30,7 +30,10 @@ class CommunicatorHandler:
         self.list_vip_drones = [] # [NEW] Track drones carrying victims (Priority yielding)
         self.list_victims_taken_care_of = []
         self.list_received_maps = [None for i in range(10)] #list_received_map[n] = map given by drone whose identifier is n
-        if self.drone.communicator_is_disabled(): return
+        if self.drone.communicator_is_disabled(): 
+            
+            if self.drone.grasped_wounded_persons(): self.drone.has_priority = True
+            return
 
         for msg_package in self.drone.communicator.received_messages:
             content = msg_package[1] if isinstance(msg_package, tuple) else msg_package
@@ -54,9 +57,8 @@ class CommunicatorHandler:
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
 
-            if content['priority'] > self.drone.priority: 
+            if not drone_with_bigger_priority and content['priority'] > self.drone.priority: 
                 drone_with_bigger_priority = True
-                self.drone.has_priority = False
 
             if self.drone.state == 'END_GAME' and self.drone.is_inside_return_area and content['returned']:
 
@@ -67,7 +69,7 @@ class CommunicatorHandler:
         if nb_drones_returned == len(self.drone.communicator.received_messages) and not self.everyone_home: 
             self.everyone_home = True
         else: self.everyone_home = False
-        if not drone_with_bigger_priority: self.has_priority = True
+        if not drone_with_bigger_priority: self.drone.has_priority = True
 
         self.consolidate_maps()
         return          

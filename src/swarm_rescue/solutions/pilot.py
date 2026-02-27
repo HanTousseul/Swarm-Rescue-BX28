@@ -166,22 +166,7 @@ class Pilot:
                 last_drone_angle = semantic_data[elt].angle # prevents us from computing force multiple times if multiple rays hit the same drone
 
 
-
-
-                # Need to come back to this (MARC)
-
-
-
-
-                if not self.drone.grasped_wounded_persons(): # drones who have priority don't deviate from their trajectories because of other drones
-
-
-
-
-                # Need to come back to this (MARC)
-
-
-
+                if not self.drone.has_priority: # drones who have priority don't deviate from their trajectories because of other drones
 
                     force = DRONE_CONSTANT / (semantic_data[elt].distance / 100) ** exponent_drone
                     unit_vector_angle = semantic_data[elt].angle + np.pi + epsilon_range * (2 * random() - 1) # unstuck the drones by adding a small random deviation angle
