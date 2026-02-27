@@ -343,6 +343,7 @@ class Navigator:
             if path_blocked:
                 self.current_path = [] 
                 self.last_astar_target = None
+                self.failure_cooldown = 10
                 return None 
 
         # --- 2. TARGET SANITIZATION ---
@@ -370,7 +371,7 @@ class Navigator:
             # Recompute the field if the target moves significantly or the timer expires
             if self.dijkstra_target_cached is None or np.linalg.norm(final_target - self.dijkstra_target_cached) > 20.0: 
                 should_update_map = True
-            elif self.dijkstra_update_timer > 40: 
+            elif self.dijkstra_update_timer > 25:
                 should_update_map = True
                 
             if should_update_map:
@@ -400,7 +401,8 @@ class Navigator:
                 self.last_astar_target = final_target.copy()
                 self.last_path_index = 0
                 
-                if not self.current_path: 
+                if not self.current_path:
+                    self.failure_cooldown = 20
                     return None
 
         elif self.drone.state == 'EXPLORING':

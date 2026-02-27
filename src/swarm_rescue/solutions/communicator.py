@@ -51,8 +51,9 @@ class CommunicatorHandler:
                 dist = content.get('victim_chosen_dist', float('inf'))
                 self.list_victims_taken_care_of.append((content['victim_chosen'], dist, content['id']))
 
-            if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
-                self.list_received_maps[drone_id] = content['obstacle_map']
+            if content.get('obstacle_map') is not None:
+                if self.drone.cnt_timestep - self.map_date_update[drone_id] > MAPPING_REFRESH_RATE:
+                    self.list_received_maps[drone_id] = content['obstacle_map']
 
             if content['priority'] > self.drone.priority: 
                 drone_with_bigger_priority = True
@@ -107,6 +108,7 @@ class CommunicatorHandler:
         '''
         OBSTACLE_THRESHOLD = 5.0
         FREE_SPACE_THRESHOLD = -1.0
+        map_updated = False
         for drone_id in range(10):
 
             obs_map = self.list_received_maps[drone_id]
@@ -121,8 +123,10 @@ class CommunicatorHandler:
             self.drone.nav.obstacle_map.grid[mask_free] = obs_map[mask_free]
 
             self.map_date_update[drone_id] = self.drone.cnt_timestep
-        self.drone.nav.obstacle_map.update_cost_map()
-    
+            self.list_received_maps[drone_id] = None
+            map_updated = True
+        if map_updated:
+            self.drone.nav.obstacle_map.update_cost_map()
 
     def get_priority(self) -> int: 
         '''
@@ -163,7 +167,7 @@ class CommunicatorHandler:
         if victim is not None:
             dist_to_victim = float(np.linalg.norm(self.drone.estimated_pos - victim))
 
-        if self.drone.cnt_timestep % 31 == self.drone.identifier * 3:
+        if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
             # # print('Sent map!')
             obstacle_map = self.drone.nav.obstacle_map.grid  
         else: obstacle_map = None

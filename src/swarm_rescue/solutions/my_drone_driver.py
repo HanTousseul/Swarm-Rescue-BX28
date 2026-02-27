@@ -65,6 +65,7 @@ class MyStatefulDrone(DroneAbstract):
         self.safe_dispersion_reached_tick = None
         self.panic_timer = 0
         self.current_target_best_victim_pos = None
+        self.no_frontier_cnt = 0
 
     def control(self) -> CommandsDict:
         """
@@ -72,6 +73,7 @@ class MyStatefulDrone(DroneAbstract):
         Follows the Sense -> Plan -> Act architecture.
         """
         self.cnt_timestep += 1
+        if self.cnt_timestep % 1000 == 0 and self.identifier == 0: print(F"Finish {self.cnt_timestep} timesteps!")
         
         # ================= 1. SENSING & MAPPING =================
         semantic_data = self.semantic_values() 
@@ -298,9 +300,17 @@ class MyStatefulDrone(DroneAbstract):
                         self.nav.last_path_index = 0
                         self.nav.last_astar_target = frontier.copy() 
                         self.path_fail_count = 0
+                        self.no_frontier_cnt = 0
                     else:
                         self.current_target = None
                         self.floodfill_cooldown = 15
+                        self.no_frontier_cnt += 1
+                        if self.cnt_timestep > self.max_timesteps * 0.5 and self.no_frontier_cnt >= 20:
+                            print(f"[{self.identifier}] No frontier, go back to return area!")
+                            self.RETURN_TRIGGER_STEPS = self.steps_remaining
+                        else:
+                            # Fallback: Lost in the fog. Spin to clear Lidar data.
+                            return self.pilot.move_function(forward=0, lateral=0, rotation=0.8, grasper=0, repulsive_force_bool=True)
                     
                     # Fallback: Lost in the fog. Spin to clear Lidar data.
                     if self.current_target is None:
@@ -325,6 +335,15 @@ class MyStatefulDrone(DroneAbstract):
                     self.rescue_time = 0
                     return self.pilot.move_function(forward=0, lateral=0, rotation=1, grasper=0, repulsive_force_bool=True)
             # -------------------------------------------------------------
+            # Clear wall around rescue victim
+            if self.current_target is not None:
+                gx, gy = self.nav.obstacle_map.world_to_grid(self.current_target[0], self.current_target[1])
+                for dy in range(-3, 4):
+                    for dx in range(-3, 4):
+                        ny, nx = gy + dy, gx + dx
+                        if 0 <= ny < self.nav.obstacle_map.grid_h and 0 <= nx < self.nav.obstacle_map.grid_w:
+                            self.nav.obstacle_map.grid[ny, nx] = -0.5
+                self.nav.obstacle_map.update_cost_map()
             dist_to_target = np.linalg.norm(self.estimated_pos - self.current_target) if self.current_target is not None else 9999
             if dist_to_target < 70: 
                 self.rescue_time += 1

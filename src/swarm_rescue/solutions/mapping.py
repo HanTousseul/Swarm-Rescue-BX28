@@ -58,8 +58,8 @@ class GridMap:
         update_layer = np.zeros_like(self.grid)
         step = 3 # Optimization: Process every 3rd ray
         
-        DRONE_RADIUS_IGNORE = 20
-        VICTIM_RADIUS_IGNORE = 20
+        DRONE_RADIUS_IGNORE = 15
+        VICTIM_RADIUS_IGNORE = 15
 
         for i in range(0, len(lidar_data), step):
             dist = lidar_data[i]
@@ -257,16 +257,19 @@ class GridMap:
                             continue
                             
                     step_risk = self.cost_map[ny, nx] 
-                    
-                    # Massive penalty for UNKNOWN space to force Dijkstra to stay in cleared VAL_FREE areas
-                    if -1.0 < self.grid[ny, nx] <= 20.0:
-                        penalty = 50.0 if self.panic_mode else 5000.0
-                        step_risk += penalty
                         
                     # Stop expanding into lethal obstacles
                     if step_risk >= 9999.0: 
                         continue
-                        
+
+                    # Increase dangerousness of wall when returning
+                    step_risk = step_risk ** 2.0
+
+                    # Massive penalty for UNKNOWN space to force Dijkstra to stay in cleared VAL_FREE areas
+                    if -1.0 < self.grid[ny, nx] <= 20.0:
+                        penalty = 50.0 if self.panic_mode else 20000.0
+                        step_risk += penalty
+
                     # Calculate new cumulative cost
                     new_val = curr_val + (dist_w * step_risk)
                     

@@ -121,11 +121,7 @@ class Pilot:
         total_orthor_repulsion = 0
 
         # Base wall constants (kept small to allow smooth navigation in open/tight spaces)
-        BASE_WALL_CONSTANT = 0
-        if self.is_in_tight_area():
-            BASE_WALL_CONSTANT = 0.015
-        else:
-            BASE_WALL_CONSTANT = 0.006
+        BASE_WALL_CONSTANT = 0.005
             
         DRONE_CONSTANT = .1
         quotient_rad_repulsion = 4
@@ -180,11 +176,11 @@ class Pilot:
                 if not am_i_vip:
                     compute_force = True
                     if is_other_vip:
-                        force_multiplier = 2.0  # Normal yields heavily to VIP
+                        force_multiplier = 0.5  # Normal yields heavily to VIP
                 else:
                     if is_other_vip:
                         compute_force = True    # VIP vs VIP symmetric evasion
-                        force_multiplier = 1.0
+                        force_multiplier = 0.8
                     else:
                         compute_force = False   # VIP ignores Normal drones
 
@@ -235,7 +231,7 @@ class Pilot:
                 else:
                     effective_wall_constant = BASE_WALL_CONSTANT        # Normal smooth flight
                 
-                if self.drone.state == "RETURNING": effective_wall_constant = 0
+                if self.drone.state == "RETURNING": effective_wall_constant = BASE_WALL_CONSTANT * 0.5
 
                 # check_victim_around = False
                 # for data in self.drone.semantic_values():
