@@ -150,41 +150,38 @@ class MyStatefulDrone(DroneAbstract):
                 W, H = self.map_size
                 sx, sy = self.initial_position
                 
-                # 1. Chuẩn hóa vị trí về khoảng [-1, 1] để biết ta đang ở đâu so với TÂM
+                # 1. Normalize distance to [-1, 1] to know position compare to center
                 nx = sx / (W / 2.0)
                 ny = sy / (H / 2.0)
                 
-                # Cắt (Clamp) để đề phòng lỗi tràn số
+                # Clamp to prevent out of bound
                 nx = max(-1.0, min(1.0, nx))
                 ny = max(-1.0, min(1.0, ny))
                 
-                # Tính xem có đang ở "Vùng ven" (Outer 40% của bản đồ) không
+                # Calculate to see if it's in outer of the map
                 is_near_x_edge = abs(nx) > 0.6
                 is_near_y_edge = abs(ny) > 0.6
                 
                 TOTAL_DRONES = 10 
                 safe_id = self.identifier % TOTAL_DRONES
                 
-                # 2. Tính toán Độ Mở (Spread) và Chia góc
+                # 2. Calculate spread and angle
                 if not is_near_x_edge and not is_near_y_edge:
-                    # Trường hợp 1: Spawn ở giữa map -> Xòe quạt tròn 360 độ
+                    # If spawn in the middle of the map
                     self.preferred_angle = (safe_id / TOTAL_DRONES) * 2 * math.pi
                 else:
-                    # Trường hợp 2: Spawn ở vùng ven -> Lấy TÂM BẢN ĐỒ (0,0) làm chuẩn!
-                    # Hướng từ (sx, sy) về (0,0) luôn là hướng thoáng nhất, không bao giờ đâm tường.
+                    # If spawn in the edge of the map
                     base_angle = math.atan2(-sy, -sx)
                     
                     if is_near_x_edge and is_near_y_edge:
-                        # Ở góc map -> Quạt hẹp 80 độ (0.44 pi)
                         spread = math.pi * 0.44 
                     else:
-                        # Ở cạnh map -> Quạt rộng 140 độ (0.77 pi)
                         spread = math.pi * 0.77 
                         
                     start_angle = base_angle - (spread / 2.0)
                     self.preferred_angle = start_angle + (safe_id / max(1, (TOTAL_DRONES - 1))) * spread
                     
-                # Chuẩn hóa góc về [-pi, pi]
+                # Normalize angle to [-pi, pi]
                 self.preferred_angle = math.atan2(math.sin(self.preferred_angle), math.cos(self.preferred_angle))
 
                 # print(f"[{self.identifier}] 🚀 SMART DISPERSION. Target Angle: {math.degrees(self.preferred_angle):.0f}°. To EXPLORING.")
