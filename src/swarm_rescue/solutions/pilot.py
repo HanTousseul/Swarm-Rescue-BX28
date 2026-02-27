@@ -237,7 +237,7 @@ class Pilot:
     def move_function(self,forward: float, lateral: float, rotation: float, grasper: int, repulsive_force_bool:bool,total_correction_norm:float = 0.8) -> CommandsDict:
         
         '''
-        returns a CommandsDict for a drone standing still, will still move (slowly) a bit just to avoid obstacles
+        Takes in movement parameters and outputs a commandsdict that controls drone movement
         
         :param self: self
         :param forward: forward velocity in (-1,1). Negative values indicate backwards movement
