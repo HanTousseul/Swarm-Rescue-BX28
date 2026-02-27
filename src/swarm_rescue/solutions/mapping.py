@@ -58,8 +58,8 @@ class GridMap:
         update_layer = np.zeros_like(self.grid)
         step = 3 # Optimization: Process every 3rd ray
         
-        DRONE_RADIUS_IGNORE = 40.0 
-        VICTIM_RADIUS_IGNORE = 30.0 
+        DRONE_RADIUS_IGNORE = 25
+        VICTIM_RADIUS_IGNORE = 25 
 
         for i in range(0, len(lidar_data), step):
             dist = lidar_data[i]
