@@ -1,3 +1,7 @@
+import numpy as np
+from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
+from .mapping import THRESHOLD_MIN, THRESHOLD_MAX
+
 MAPPING_REFRESH_RATE = 200 # in timesteps, time between updates to the map by the same drone
 
 class CommunicatorHandler:
@@ -7,6 +11,7 @@ class CommunicatorHandler:
         self.comm_counter = 0 
         self.map_date_update = [0 for i in range (10)] #timestep of last map update given by a certain drone
         self.list_wounded = []
+        self.everyone_home = False
 
     def process_incoming_messages(self) -> None:
         '''
@@ -14,6 +19,12 @@ class CommunicatorHandler:
         
         :param self: self
         '''
+
+        self.drone.priority = self.get_priority()
+        self.drone.has_priority = False
+        drone_with_bigger_priority:bool = False
+
+        nb_drones_returned = 0
 
         self.list_nearby_drones = []
         self.list_vip_drones = [] # [NEW] Track drones carrying victims (Priority yielding)
@@ -43,11 +54,20 @@ class CommunicatorHandler:
             if self.drone.cnt_timestep - self.map_date_update[content['id']] > MAPPING_REFRESH_RATE:
                 self.list_received_maps[drone_id] = content['obstacle_map']
 
-            #for elt in content['victim_list']:
-#
-            #    if elt not in self.drone.victim_manager.registry:
-            #    
-            #       self.drone.victim_manager.registry.append(elt)  
+            if content['priority'] > self.drone.priority: 
+                drone_with_bigger_priority = True
+                self.drone.has_priority = False
+
+            if self.drone.state == 'END_GAME' and self.drone.is_inside_return_area and content['returned']:
+
+                nb_drones_returned += 1
+
+            if content['everyone_home']: self.everyone_home = True
+        
+        if nb_drones_returned == len(self.drone.communicator.received_messages) and not self.everyone_home: 
+            self.everyone_home = True
+        else: self.everyone_home = False
+        if not drone_with_bigger_priority: self.has_priority = True
 
         self.consolidate_maps()
         return          
@@ -80,7 +100,7 @@ class CommunicatorHandler:
         self.drone.nav.obstacle_map.update_cost_map()
     
 
-    def priority(self) -> int: 
+    def get_priority(self) -> int: 
         '''
         Returns an integer giving the "priority" of a drone, the higher the integer, the more priority the drone gets. this helps resolve traffic jams. if a drone is carrying a wounded, it has the priority over non-carrying drones. in case of a tie, the drone with the highest identifier wins.
         
@@ -114,17 +134,26 @@ class CommunicatorHandler:
         
         else: victim = None
         if self.drone.cnt_timestep % 51 == self.drone.identifier * 5:
-            # # print('Sent map!')
+            # print('Sent map!')
             obstacle_map = self.drone.nav.obstacle_map.grid  
         else: obstacle_map = None
+
+        if self.drone.state == 'END_GAME' and self.drone.is_inside_return_area:
+
+            returned = True
+
+        else: returned = False
+
         return_dict =   {'id' : self.drone.identifier,
                         'position' : self.drone.estimated_pos,
                         'state' : self.drone.state,
                         'grasping' : True if self.drone.grasped_wounded_persons() else False,
                         'obstacle_map' : obstacle_map,
-                        'priority': self.priority(),
+                        'priority': self.get_priority(),
                         'victim_list': self.drone.victim_manager.registry,
-                        'victim_chosen': victim
+                        'victim_chosen': victim,
+                        'returned': returned,
+                        'everyone_home': self.everyone_home
         }
 
         return return_dict
