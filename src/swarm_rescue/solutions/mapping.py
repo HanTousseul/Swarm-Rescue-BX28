@@ -34,6 +34,28 @@ class GridMap:
         self.cost_map = None
         self.dijkstra_grid = None
         self.panic_mode = False 
+
+        # === PRE-ALLOCATED ARRAYS FOR COST MAP ===
+        # Boolean mask for obstacle detection
+        self.obstacle_mask_bool = np.zeros((self.grid_h, self.grid_w), dtype=bool)
+        # uint8 masks for OpenCV operations
+        self.obstacle_mask = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
+        self.closed_obstacles = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
+        self.binary_grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
+        self.eroded_grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
+        # Distance map (float)
+        self.dist_map = np.zeros((self.grid_h, self.grid_w), dtype=np.float32)
+        
+        # Morphological kernels
+        self.closing_kernel = np.ones((3, 3), np.uint8)
+        self.erosion_kernel = np.ones((3, 3), np.uint8)
+        
+        # Distance transform settings
+        self.dist_transform_type = cv2.DIST_L2
+        self.dist_transform_mask = 5
+        
+        # Change detection
+        self._last_grid = None
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """Converts world coordinates (cm) to grid indices (x, y)."""
         gx = int((x + self.offset_x) / self.resolution)
@@ -109,47 +131,54 @@ class GridMap:
         self.grid = np.clip(self.grid, THRESHOLD_MIN, THRESHOLD_MAX)
 
     def update_cost_map(self):
-        """Generates a Cost Map using Distance Transform. High cost near walls."""
+        """Highly optimized cost map generation"""
         
-        # 1. CREATE VIRTUAL CONCRETE MASK (Do not modify self.grid directly)
-        # Filter out solid walls (Values > 10.0)
-        obstacle_mask = (self.grid > 10.0).astype(np.uint8)
+        # Skip if no changes (requires grid change detection)
+        if hasattr(self, '_last_grid') and np.array_equal(self.grid, self._last_grid):
+            return
+        self._last_grid = self.grid.copy()
         
-        # Use a 3x3 kernel (approx 24cm) to seal dotted walls (e.g., fences) 
-        # without unintentionally blocking real narrow doors.
-        closing_kernel = np.ones((3, 3), np.uint8)
+        # Reuse pre-allocated arrays
+        np.greater(self.grid, 10.0, out=self.obstacle_mask_bool)
+        np.copyto(self.obstacle_mask, self.obstacle_mask_bool.astype(np.uint8))
         
-        # Apply Morphological Close to bridge small gaps between obstacles
-        closed_obstacles = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, closing_kernel)
+        # Morphological close (unavoidable allocation)
+        self.closed_obstacles = cv2.morphologyEx(
+            self.obstacle_mask, 
+            cv2.MORPH_CLOSE, 
+            self.closing_kernel
+        )
         
-        # 2. GENERATE SAFETY MAP FROM THE NEW MASK
-        # Invert the mask: 1 = free space, 0 = wall (including virtual concrete)
-        binary_grid = (1 - closed_obstacles).astype(np.uint8)
+        # In-place binary operations
+        np.subtract(1, self.closed_obstacles, out=self.binary_grid, dtype=np.uint8)
+        cv2.erode(self.binary_grid, self.erosion_kernel, dst=self.eroded_grid, iterations=1)
         
-        # Erode the free space slightly to maintain a safety margin from the walls
-        kernel = np.ones((3, 3), np.uint8) 
-        eroded_grid = cv2.erode(binary_grid, kernel, iterations=1)
+        # Distance transform
+        cv2.distanceTransform(
+            self.eroded_grid, 
+            self.dist_transform_type, 
+            self.dist_transform_mask,
+            dst=self.dist_map
+        )
         
-        # Calculate distance from each free cell to the nearest wall
-        self.dist_map = cv2.distanceTransform(eroded_grid, cv2.DIST_L2, 5)
+        # Vectorized cost calculation
+        safety_weight = 10.0 if self.panic_mode else 60.0
+        robot_radius = 1.0 if self.panic_mode else 1.5
+        unknown_penalty = 10.0 if self.panic_mode else 100.0
         
-        # Calculate base cost: Inversely proportional to the distance from obstacles
-        SAFETY_WEIGHT = 10.0 if self.panic_mode else 60.0
-        self.cost_map = 1.0 + (SAFETY_WEIGHT / (self.dist_map + 0.1))
+        # Single pass for cost calculation
+        with np.errstate(divide='ignore', invalid='ignore'):
+            self.cost_map = 1.0 + safety_weight / (self.dist_map + 0.1)
         
-        # 3. APPLY LETHAL RADIUS AND PENALTIES
-        # Shrink lethal radius (1.5 grids ~ 12cm) to allow squeezing through pillars and tight corridors
-        ROBOT_RADIUS_GRID = 1.0 if self.panic_mode else 1.5 
-        self.cost_map[self.dist_map < ROBOT_RADIUS_GRID] = 9999.0
-
-        # Heavily penalize unknown areas (based on the original unaltered self.grid)
+        # Combined masks for penalties (single pass through memory)
+        lethal_mask = self.dist_map < robot_radius
         unknown_mask = (self.grid > -1.0) & (self.grid <= 20.0)
-        UNKNOWN_PENALTY = 10.0 if self.panic_mode else 100.0
-        self.cost_map[unknown_mask] += UNKNOWN_PENALTY
+        obstacle_mask_final = (self.closed_obstacles == 1) | (self.grid > 20.0)
         
-        # Strictly lock Cost = 9999.0 on actual walls OR areas sealed by the virtual concrete
-        self.cost_map[closed_obstacles == 1] = 9999.0
-        self.cost_map[self.grid > 20.0] = 9999.0
+        # Apply all penalties (vectorized)
+        self.cost_map[lethal_mask] = 9999.0
+        self.cost_map[unknown_mask] += unknown_penalty
+        self.cost_map[obstacle_mask_final] = 9999.0
 
     def get_dijkstra_path(self, current_pos: np.ndarray, max_steps: int = 40) -> List[np.ndarray]:
         if not hasattr(self, 'dijkstra_grid') or self.dijkstra_grid is None: return []

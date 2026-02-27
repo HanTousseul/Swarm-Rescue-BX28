@@ -2,7 +2,7 @@ import numpy as np
 from swarm_rescue.simulation.ray_sensors.drone_semantic_sensor import DroneSemanticSensor
 from .mapping import THRESHOLD_MIN, THRESHOLD_MAX
 
-MAPPING_REFRESH_RATE = 200 # in timesteps, time between updates to the map by the same drone
+MAPPING_REFRESH_RATE = 100 # in timesteps, time between updates to the map by the same drone
 
 class CommunicatorHandler:
     def __init__(self, drone):
