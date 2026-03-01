@@ -70,6 +70,7 @@ class MyStatefulDrone(DroneAbstract):
         self.MAX_SPEED = 0.9 #in [0,1]
         self.RETURN_TRIGGER_STEPS = int(self.max_timesteps * 0.2)
         self.floodfill_cooldown = 0
+
         # [NEW] Counter for map completion
         self.no_frontier_patience = 0
         self.preferred_angle = None
@@ -217,12 +218,12 @@ class MyStatefulDrone(DroneAbstract):
             print(f"[{self.identifier}] 🏁 STARTED.")
 
         # 3. Locate Rescue Center
-        check_center = False
+        self.check_center = False
         if semantic_data:
             tmp = float('inf')
             for data in semantic_data:
                 if data.entity_type == DroneSemanticSensor.TypeEntity.RESCUE_CENTER:
-                    check_center = True
+                    self.check_center = True
                     angle_global = self.estimated_angle + data.angle
                     obj_x = self.estimated_pos[0] + data.distance * math.cos(angle_global)
                     obj_y = self.estimated_pos[1] + data.distance * math.sin(angle_global)
@@ -231,14 +232,14 @@ class MyStatefulDrone(DroneAbstract):
                         tmp = dist_to_center
                         self.rescue_center_pos = np.array([obj_x, obj_y])
 
-        # # Debug visualization
-        # if self.cnt_timestep % 5 == 0:
-        #     self.nav.obstacle_map.display(
-        #         self.estimated_pos, 
-        #         current_target=self.current_target,
-        #         current_path=self.nav.current_astar_path, 
-        #         window_name=f"Map - Drone {self.identifier}"
-        #     )
+        # Debug visualization
+        if self.cnt_timestep % 5 == 0:
+            self.nav.obstacle_map.display(
+                self.estimated_pos, 
+                current_target=self.current_target,
+                current_path=self.nav.current_astar_path, 
+                window_name=f"Map - Drone {self.identifier}"
+            )
 
         # 4. Receive and process messages
 
@@ -410,7 +411,7 @@ class MyStatefulDrone(DroneAbstract):
 
         elif self.state == "DROPPING":
             self.current_target = self.rescue_center_pos
-            if check_center: self.drop_step += 1
+            if self.check_center: self.drop_step += 1
             
             if self.drop_step > 150 or not self.grasped_wounded_persons(): 
                 self.drop_step = 0
@@ -566,7 +567,7 @@ class MyStatefulDrone(DroneAbstract):
         # Execute Pilot Command
         real_target = self.current_target 
         self.current_target = next_waypoint 
-        self.MAX_SPEED = 1.0 if self.state == "RETURNING" else 0.9
+        self.MAX_SPEED = 0.8 if self.state == "RETURNING" else 0.6
         if self.print_move_functions: print(f'{self.identifier} {self.state} move_to_target_carrot_function_call my_drone_driver')
         command = self.pilot.move_to_target_carrot()
         self.current_target = real_target 

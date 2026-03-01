@@ -90,7 +90,7 @@ class Pilot:
                 self.drone.current_target = None
             if self.drone.is_inside_return_area and not self.drone.grasped_wounded_persons(): self.drone.state = "END_GAME"
 
-    def is_in_tight_area(self,SMALL_VALUE:int = 50,min_nb_rays:int = 30):
+    def is_in_tight_area(self,SMALL_VALUE:int = 80,min_nb_rays:int = 30):
         '''
         returns whether or not the drone is in a tight area (and should get a weaker repulsive force)
 
@@ -105,11 +105,11 @@ class Pilot:
 
         lidar_data = self.drone.lidar_values()
         nb = 0
-        nb_rays_practical = min_nb_rays // 5
-        for ray in range(0,nb_rays_practical,5):
+        for ray in range(0,len(lidar_data)):
 
             if lidar_data[ray] < SMALL_VALUE: nb += 1
-            if nb > min_nb_rays: return True
+            
+        if nb > min_nb_rays: return True
 
         return False
 
@@ -128,11 +128,12 @@ class Pilot:
         total_rad_repulsion = 0
         total_orthor_repulsion = 0
 
-        if self.is_in_tight_area():
-            WALL_CONSTANT = 0.02
-        else:
-            WALL_CONSTANT = 0.007
         DRONE_CONSTANT = .1
+        if self.is_in_tight_area():
+            WALL_CONSTANT = 0.003
+        elif self.drone.state in ['END_GAME', 'STOP']:
+            WALL_CONSTANT = 0.002
+        else: WALL_CONSTANT = 0.013
 
         quotient_rad_repulsion = 4
         quotient_ortho_repulsion = 2
@@ -211,6 +212,7 @@ class Pilot:
 
                 lidar_data[ray % 180] = 400
 
+
         # repulsive force from walls
         for elt in range (len(lidar_data)):
 
@@ -276,8 +278,22 @@ class Pilot:
         :return: Description
         :rtype: CommandsDict
         '''
+        #The norm of the velocity is given by an affine function of the form velocity = a*d + b where and and b are parameters and d is the distance to the target. b is the minimum speed that the drone will have, and a is the linear factor of the speed. velocity will be capped at 100 * a + b
+
+        max_velocity_norm = self.drone.MAX_SPEED
+        min_velocity_norm = 0.3
+        linear_velocity_coefficient = (max_velocity_norm - min_velocity_norm) / 100
+        angle_tolerance = 0.18 # radians
+
         if self.drone.current_target is None:
             return self.drone.pilot.move_function(forward = 0, lateral = 0, rotation = 0, grasper = 0, repulsive_force_bool = True)
+        
+        # 1. Front-approach grasp logic during rescue
+        front_grasp_cmd = self.front_grasp_alignment_command()
+        if front_grasp_cmd is not None:
+            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
+            return front_grasp_cmd
+        
         # 1. Estimate Speed
         if self.last_pos is not None:
             move_dist = np.linalg.norm(self.drone.estimated_pos - self.last_pos)
@@ -288,84 +304,24 @@ class Pilot:
         delta_y = self.drone.current_target[1] - self.drone.estimated_pos[1]
         dist_to_target = math.hypot(delta_x, delta_y)
         target_angle = math.atan2(delta_y, delta_x)
-
-        is_reversing = (self.drone.grasped_wounded_persons() and self.drone.state == 'RETURNING')
-
-        # State Checks
-        is_final_approach = (self.drone.state == 'RESCUING' and dist_to_target < 55.0)
-        is_aggressive = (self.drone.state == 'RESCUING') or (dist_to_target < 80.0)
-
-        if is_reversing:
-            desired_angle = normalize_angle(target_angle + math.pi)
-        else:
-            desired_angle = target_angle
-
-        angle_error = normalize_angle(desired_angle - self.drone.estimated_angle)
-
-        # =========================================================
-        # 2. ROTATION CONTROL (VARIABLE KP STRATEGY)
-        # =========================================================
-
-        # Default: Fast response for navigation
-        KP_ROT = 4.0 
-
-        # [USER STRATEGY]: If close to target (< 70cm), reduce KP
-        # This makes the drone turn softer/slower, avoiding oscillations/jitter close to the victim.
-        if dist_to_target < 70.0:
-            KP_ROT = 1.5 
-
-        rotation_cmd = KP_ROT * angle_error
-        rotation_cmd = np.clip(rotation_cmd, -1.0, 1.0)
-
-        # Reduce speed if turning, but keep it smoother (cos^2 instead of cos^5)
-        alignment_factor = max(0.2, math.cos(angle_error) ** 2)
-
-        # 5. Active Braking & Approach
-        BRAKE_DIST = 120.0 
-        if dist_to_target < BRAKE_DIST:
-            # Keep enough minimum thrust close to target to avoid stall near drop zone.
-            base_forward = max(0.4, dist_to_target * 0.03) 
-            base_forward *= alignment_factor
-            if self.current_speed > 4.0: base_forward = -0.4 
-        else:
-            base_forward = self.drone.MAX_SPEED * alignment_factor
-
-        # Catch-up boost while rescuing moving targets.
-        if self.drone.state == "RESCUING" and not self.drone.grasped_wounded_persons():
-            wounded = self._nearest_visible_wounded()
-            if wounded is not None and 18.0 < wounded.distance < 170.0:
-                # Stronger boost at medium range, lighter near latch distance.
-                if wounded.distance > 70.0:
-                    base_forward = min(1.0, base_forward + 0.16)
-                else:
-                    base_forward = min(1.0, base_forward + 0.10)
-
-        # Dampen steering oscillations in tight corridors without reducing thrust.
-        lidar_values = self.drone.lidar_values()
-        if lidar_values is not None and min(lidar_values) < 60.0:
-            if abs(angle_error) < 0.5:
-                rotation_cmd *= 0.5
-
-        # Keep wall-shield behavior consistent when reversing.
-        if not is_reversing:
-            # Forward motion: keep thrust and repulsion signs unchanged.
-            forward_cmd = base_forward
-        else:
-            # Reverse motion: flip thrust only, keep wall-repulsion direction.
-            forward_cmd = -base_forward
-            
-        forward_cmd = np.clip(forward_cmd, -1.0, 1.0)
-
-        # 7. Front-approach grasp logic during rescue
-        front_grasp_cmd = self.front_grasp_alignment_command()
-        if front_grasp_cmd is not None:
-            #print(f'{self.drone.identifier} {self.drone.state}front_grasp_alignment_command_pilot')
-            return front_grasp_cmd
-
         grasper_val = 1 if self.drone.grasped_wounded_persons() else 0
+        rotation_velocity = 0.8 
+
+        print(self.drone.identifier, self.drone.state, self.drone.estimated_angle, target_angle)
+        if self.drone.state in ['RETURNING', 'DROPPING'] and self.drone.check_center and abs(target_angle - self.drone.estimated_angle) > angle_tolerance:
+            print(self.drone.identifier)
+            if target_angle < self.drone.estimated_angle: rotation_velocity = - rotation_velocity
+
+            return self.move_function(forward=0, lateral=0, rotation=rotation_velocity, grasper=grasper_val, repulsive_force_bool=True) 
+
+        actual_velocity_norm = min_velocity_norm + dist_to_target * linear_velocity_coefficient
+
+        forward_velocity = actual_velocity_norm * np.cos(target_angle - self.drone.estimated_angle)
+        lateral_velocity = actual_velocity_norm * np.sin(target_angle - self.drone.estimated_angle)
+
         #print(forward_cmd, np.clip(cmd_lateral, -1.0, 1.0), rotation_cmd, grasper_val)
         #print(f'{self.drone.identifier} {self.drone.state} move_to_target_carrot_last_pilot')
-        return self.move_function(forward = forward_cmd, lateral = 0, rotation = rotation_cmd, grasper = grasper_val, repulsive_force_bool = True)
+        return self.move_function(forward = forward_velocity, lateral = lateral_velocity, rotation = 0, grasper = grasper_val, repulsive_force_bool = True)
     
 
     def dispersion(self):
